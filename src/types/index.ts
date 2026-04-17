@@ -48,6 +48,8 @@ export type RootStackParamList = {
   Counter: undefined;
   Kitchen: undefined;
   Pickup: undefined;
+  MenuManage: undefined;
+  SalesDashboard: undefined;
 };
 
 // ===== Sales Dashboard =====

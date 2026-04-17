@@ -1,38 +1,52 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
-import type { Order, OrderStatus } from "../types";
+import type { OrderStatus } from "../types";
 
 const ORDERS_QUERY_KEY = ["orders"];
 
+// 전역에서 단일 채널만 유지
+let globalChannel: ReturnType<typeof supabase.channel> | null = null;
+let subscriberCount = 0;
+
 /**
- * 특정 status의 주문 목록을 실시간으로 구독하여 React Query 캐시를 갱신한다.
+ * orders 테이블 변경을 실시간 구독하여 React Query 캐시를 갱신한다.
+ * 여러 화면에서 호출해도 단일 채널을 공유한다.
  */
-export function useRealtimeOrders(statusFilter: OrderStatus | OrderStatus[]) {
+export function useRealtimeOrders(_statusFilter?: OrderStatus | OrderStatus[]) {
   const queryClient = useQueryClient();
-  const statuses = Array.isArray(statusFilter) ? statusFilter : [statusFilter];
+  const queryClientRef = useRef(queryClient);
+  queryClientRef.current = queryClient;
 
   useEffect(() => {
-    const channel = supabase
-      .channel(`orders-${statuses.join("-")}`)
-      .on<Order>(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "orders",
-        },
-        () => {
-          // 변경 감지 시 해당 쿼리 무효화 → 자동 refetch
-          queryClient.invalidateQueries({
-            queryKey: [...ORDERS_QUERY_KEY, ...statuses],
-          });
-        },
-      )
-      .subscribe();
+    subscriberCount++;
+
+    if (!globalChannel) {
+      globalChannel = supabase
+        .channel("orders-realtime")
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "orders",
+          },
+          () => {
+            queryClientRef.current.invalidateQueries({
+              queryKey: ORDERS_QUERY_KEY,
+            });
+          },
+        )
+        .subscribe();
+    }
 
     return () => {
-      supabase.removeChannel(channel);
+      subscriberCount--;
+      if (subscriberCount <= 0 && globalChannel) {
+        supabase.removeChannel(globalChannel);
+        globalChannel = null;
+        subscriberCount = 0;
+      }
     };
-  }, [queryClient, statuses.join(",")]);
+  }, []);
 }

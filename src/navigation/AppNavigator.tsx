@@ -6,6 +6,8 @@ import RoleSelectScreen from "../screens/RoleSelectScreen";
 import CounterScreen from "../screens/CounterScreen";
 import KitchenScreen from "../screens/KitchenScreen";
 import PickupScreen from "../screens/PickupScreen";
+import MenuManageScreen from "../screens/MenuManageScreen";
+import SalesDashboardScreen from "../screens/SalesDashboardScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -31,6 +33,16 @@ export default function AppNavigator() {
           name="Pickup"
           component={PickupScreen}
           options={{ title: "배출구" }}
+        />
+        <Stack.Screen
+          name="MenuManage"
+          component={MenuManageScreen}
+          options={{ title: "메뉴 관리" }}
+        />
+        <Stack.Screen
+          name="SalesDashboard"
+          component={SalesDashboardScreen}
+          options={{ title: "매출 조회" }}
         />
       </Stack.Navigator>
     </NavigationContainer>

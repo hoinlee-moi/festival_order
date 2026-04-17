@@ -1,0 +1,26 @@
+{
+  "hooks": [
+    {
+      "event": "PreToolUse",
+      "tools": [
+        "replace_string_in_file",
+        "multi_replace_string_in_file",
+        "create_file",
+        "read_file",
+        "grep_search",
+        "semantic_search",
+        "file_search",
+        "run_in_terminal",
+        "execution_subagent"
+      ],
+      "steps": [
+        {
+          "type": "gate",
+          "condition": "The tool arguments reference any .env file in any way — including reading, writing, editing, searching, moving, copying, or deleting. This includes file paths containing '.env' (e.g., .env, .env.local, .env.production, .env.development), terminal commands that cat/type/read/echo/print .env files, and grep or search patterns targeting .env files.",
+          "action": "block",
+          "message": "🚫 .env 파일 접근 차단: .env 파일은 민감한 환경 변수(API 키 등)를 포함하므로 읽기 및 수정이 모두 금지되어 있습니다. 사용자가 직접 확인하고 수정해야 합니다."
+        }
+      ]
+    }
+  ]
+}

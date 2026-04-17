@@ -20,7 +20,7 @@ export function useOrdersByStatus(status: OrderStatus | OrderStatus[]) {
       if (error) throw error;
       return data as Order[];
     },
-    refetchInterval: 10000, // 실시간 구독 백업용 10초 폴링
+    refetchInterval: false, // 실시간 트리거로 갱신
   });
 }
 
@@ -137,6 +137,6 @@ export function useSalesSummary() {
         totalOrders: orders.length,
       };
     },
-    refetchInterval: 15000,
+    refetchInterval: false,
   });
 }
