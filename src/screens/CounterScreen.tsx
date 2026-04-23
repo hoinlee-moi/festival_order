@@ -22,7 +22,13 @@ import {
 } from "../hooks/useOrders";
 import { useRealtimeOrders } from "../hooks/useRealtimeOrders";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { CartItem, Menu, Order, RootStackParamList } from "../types";
+import type {
+  CartItem,
+  Menu,
+  Order,
+  PaymentMethod,
+  RootStackParamList,
+} from "../types";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Counter">;
 
@@ -49,6 +55,7 @@ export default function CounterScreen({ navigation }: Props) {
   const [showModal, setShowModal] = useState(false);
   const [phone, setPhone] = useState("");
   const [receivedCash, setReceivedCash] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
 
   // ===== 장바구니 로직 =====
   const totalPrice = useMemo(
@@ -103,6 +110,7 @@ export default function CounterScreen({ navigation }: Props) {
     }
     setPhone("");
     setReceivedCash("");
+    setPaymentMethod("CASH");
     setShowModal(true);
   };
 
@@ -113,6 +121,13 @@ export default function CounterScreen({ navigation }: Props) {
       Alert.alert("오류", "올바른 전화번호를 입력하세요. (010XXXXXXXX)");
       return;
     }
+    if (paymentMethod === "CASH") {
+      const cash = parseInt(receivedCash, 10) || 0;
+      if (cash < totalPrice) {
+        Alert.alert("오류", "받은 금액이 부족합니다.");
+        return;
+      }
+    }
     try {
       await createOrder.mutateAsync({
         phone_number: phone,
@@ -122,6 +137,7 @@ export default function CounterScreen({ navigation }: Props) {
           price: c.price,
         })),
         total_price: totalPrice,
+        payment_method: paymentMethod,
       });
       clearCart();
       setShowModal(false);
@@ -432,50 +448,94 @@ export default function CounterScreen({ navigation }: Props) {
               onChangeText={setPhone}
             />
 
-            {/* 거스름돈 계산 */}
-            <Text style={styles.inputLabel}>받은 금액</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="금액 입력"
-              keyboardType="number-pad"
-              value={receivedCash}
-              onChangeText={setReceivedCash}
-            />
-            <View style={styles.cashShortcuts}>
+            {/* 결제 수단 선택 */}
+            <Text style={styles.inputLabel}>결제 수단</Text>
+            <View style={styles.payTabRow}>
               <TouchableOpacity
-                style={styles.cashBtn}
-                onPress={() =>
-                  setReceivedCash((prev) =>
-                    String((parseInt(prev, 10) || 0) + 10000),
-                  )
-                }
+                style={[
+                  styles.payTab,
+                  paymentMethod === "CASH" && styles.payTabActive,
+                ]}
+                onPress={() => setPaymentMethod("CASH")}
               >
-                <Text style={styles.cashBtnText}>+1만원</Text>
+                <Text
+                  style={[
+                    styles.payTabText,
+                    paymentMethod === "CASH" && styles.payTabTextActive,
+                  ]}
+                >
+                  💵 현금
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.cashBtn}
-                onPress={() =>
-                  setReceivedCash((prev) =>
-                    String((parseInt(prev, 10) || 0) + 50000),
-                  )
-                }
+                style={[
+                  styles.payTab,
+                  paymentMethod === "CARD" && styles.payTabActive,
+                ]}
+                onPress={() => setPaymentMethod("CARD")}
               >
-                <Text style={styles.cashBtnText}>5만원</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.cashBtn}
-                onPress={() => setReceivedCash(String(totalPrice))}
-              >
-                <Text style={styles.cashBtnText}>금액 맞음</Text>
+                <Text
+                  style={[
+                    styles.payTabText,
+                    paymentMethod === "CARD" && styles.payTabTextActive,
+                  ]}
+                >
+                  💳 카드
+                </Text>
               </TouchableOpacity>
             </View>
-            {cashNum > 0 && (
-              <Text
-                style={[styles.changeText, change < 0 && styles.changeNegative]}
-              >
-                거스름돈:{" "}
-                {change >= 0 ? `${change.toLocaleString()}원` : "부족"}
-              </Text>
+
+            {/* 거스름돈 계산 (현금 결제 시만) */}
+            {paymentMethod === "CASH" && (
+              <>
+                <Text style={styles.inputLabel}>받은 금액</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="금액 입력"
+                  keyboardType="number-pad"
+                  value={receivedCash}
+                  onChangeText={setReceivedCash}
+                />
+                <View style={styles.cashShortcuts}>
+                  <TouchableOpacity
+                    style={styles.cashBtn}
+                    onPress={() =>
+                      setReceivedCash((prev) =>
+                        String((parseInt(prev, 10) || 0) + 10000),
+                      )
+                    }
+                  >
+                    <Text style={styles.cashBtnText}>+1만원</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.cashBtn}
+                    onPress={() =>
+                      setReceivedCash((prev) =>
+                        String((parseInt(prev, 10) || 0) + 50000),
+                      )
+                    }
+                  >
+                    <Text style={styles.cashBtnText}>5만원</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.cashBtn}
+                    onPress={() => setReceivedCash(String(totalPrice))}
+                  >
+                    <Text style={styles.cashBtnText}>금액 맞음</Text>
+                  </TouchableOpacity>
+                </View>
+                {cashNum > 0 && (
+                  <Text
+                    style={[
+                      styles.changeText,
+                      change < 0 && styles.changeNegative,
+                    ]}
+                  >
+                    거스름돈:{" "}
+                    {change >= 0 ? `${change.toLocaleString()}원` : "부족"}
+                  </Text>
+                )}
+              </>
             )}
 
             {/* 대기번호 */}
@@ -746,6 +806,22 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   cashShortcuts: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  payTabRow: { flexDirection: "row", gap: 8, marginBottom: 14 },
+  payTab: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: "#f0f0f0",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  payTabActive: {
+    backgroundColor: "#fff",
+    borderColor: "#1a1a2e",
+  },
+  payTabText: { fontSize: 15, fontWeight: "700", color: "#999" },
+  payTabTextActive: { color: "#1a1a2e" },
   cashBtn: {
     flex: 1,
     backgroundColor: "#f0f0f0",

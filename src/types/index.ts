@@ -11,6 +11,7 @@ export interface Menu {
 // ===== Order =====
 export type OrderStatus = "PENDING" | "READY" | "COMPLETED" | "CANCELLED";
 export type SmsStatus = "NOT_SENT" | "SENDING" | "SENT" | "FAILED";
+export type PaymentMethod = "CASH" | "CARD";
 
 export interface OrderItem {
   menuName: string;
@@ -28,6 +29,8 @@ export interface Order {
   status: OrderStatus;
   sms_status: SmsStatus;
   last_sms_at: string | null;
+  payment_method: PaymentMethod;
+  closed_at: string | null;
   created_at: string;
 }
 
@@ -56,4 +59,8 @@ export type RootStackParamList = {
 export interface SalesSummary {
   totalRevenue: number;
   totalOrders: number;
+  cashRevenue: number;
+  cashOrders: number;
+  cardRevenue: number;
+  cardOrders: number;
 }

@@ -19,25 +19,44 @@ import { supabase } from "../lib/supabase";
 
 type Props = NativeStackScreenProps<RootStackParamList, "MenuManage">;
 
+type ModalMode = "create" | "edit";
+
 export default function MenuManageScreen({ navigation }: Props) {
   const { data: menus = [], isLoading } = useMenus();
   const refreshMenus = useRefreshMenus();
 
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalMode, setModalMode] = useState<ModalMode>("create");
   const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
   const [editName, setEditName] = useState("");
   const [editPrice, setEditPrice] = useState("");
   const [editAvailable, setEditAvailable] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const openCreate = () => {
+    setModalMode("create");
+    setEditingMenu(null);
+    setEditName("");
+    setEditPrice("");
+    setEditAvailable(true);
+    setModalVisible(true);
+  };
+
   const openEdit = (menu: Menu) => {
+    setModalMode("edit");
     setEditingMenu(menu);
     setEditName(menu.name);
     setEditPrice(String(menu.price));
     setEditAvailable(menu.is_available);
+    setModalVisible(true);
+  };
+
+  const closeModal = () => {
+    setModalVisible(false);
+    setEditingMenu(null);
   };
 
   const handleSave = async () => {
-    if (!editingMenu) return;
     const trimmedName = editName.trim();
     if (!trimmedName) {
       Alert.alert("오류", "메뉴 이름을 입력하세요.");
@@ -51,25 +70,72 @@ export default function MenuManageScreen({ navigation }: Props) {
 
     setSaving(true);
     try {
-      const { error } = await supabase
-        .from("menus")
-        .update({
+      if (modalMode === "create") {
+        const maxSort = menus.reduce(
+          (m, item) => Math.max(m, item.sort_order ?? 0),
+          0,
+        );
+        const { error } = await supabase.from("menus").insert({
           name: trimmedName,
           price,
           is_available: editAvailable,
-        })
-        .eq("id", editingMenu.id);
-
-      if (error) throw error;
-
-      setEditingMenu(null);
-      refreshMenus();
-      Alert.alert("완료", "메뉴가 수정되었습니다.");
+          sort_order: maxSort + 1,
+        });
+        if (error) throw error;
+        closeModal();
+        refreshMenus();
+        Alert.alert("완료", "메뉴가 추가되었습니다.");
+      } else if (modalMode === "edit" && editingMenu) {
+        const { error } = await supabase
+          .from("menus")
+          .update({
+            name: trimmedName,
+            price,
+            is_available: editAvailable,
+          })
+          .eq("id", editingMenu.id);
+        if (error) throw error;
+        closeModal();
+        refreshMenus();
+        Alert.alert("완료", "메뉴가 수정되었습니다.");
+      }
     } catch {
-      Alert.alert("오류", "메뉴 수정에 실패했습니다.");
+      Alert.alert("오류", "저장에 실패했습니다.");
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleDelete = () => {
+    if (!editingMenu) return;
+    Alert.alert(
+      "메뉴 삭제",
+      `"${editingMenu.name}" 메뉴를 삭제하시겠습니까?\n삭제된 메뉴는 복구할 수 없습니다.`,
+      [
+        { text: "취소", style: "cancel" },
+        {
+          text: "삭제",
+          style: "destructive",
+          onPress: async () => {
+            setSaving(true);
+            try {
+              const { error } = await supabase
+                .from("menus")
+                .delete()
+                .eq("id", editingMenu.id);
+              if (error) throw error;
+              closeModal();
+              refreshMenus();
+              Alert.alert("완료", "메뉴가 삭제되었습니다.");
+            } catch {
+              Alert.alert("오류", "삭제에 실패했습니다.");
+            } finally {
+              setSaving(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const renderMenuItem = ({ item }: { item: Menu }) => (
@@ -118,11 +184,22 @@ export default function MenuManageScreen({ navigation }: Props) {
         />
       )}
 
-      {/* 수정 모달 */}
-      <Modal visible={!!editingMenu} animationType="slide" transparent>
+      {/* 추가 FAB */}
+      <TouchableOpacity
+        style={styles.fab}
+        activeOpacity={0.8}
+        onPress={openCreate}
+      >
+        <Text style={styles.fabText}>＋ 새 메뉴</Text>
+      </TouchableOpacity>
+
+      {/* 추가/수정 모달 */}
+      <Modal visible={modalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>메뉴 수정</Text>
+            <Text style={styles.modalTitle}>
+              {modalMode === "create" ? "새 메뉴 추가" : "메뉴 수정"}
+            </Text>
 
             <Text style={styles.inputLabel}>메뉴 이름</Text>
             <TextInput
@@ -146,10 +223,21 @@ export default function MenuManageScreen({ navigation }: Props) {
               <Switch value={editAvailable} onValueChange={setEditAvailable} />
             </View>
 
+            {modalMode === "edit" && (
+              <TouchableOpacity
+                style={[styles.deleteBtn, saving && styles.btnDisabled]}
+                onPress={handleDelete}
+                disabled={saving}
+              >
+                <Text style={styles.deleteBtnText}>🗑 메뉴 삭제</Text>
+              </TouchableOpacity>
+            )}
+
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={styles.cancelBtn}
-                onPress={() => setEditingMenu(null)}
+                onPress={closeModal}
+                disabled={saving}
               >
                 <Text style={styles.cancelBtnText}>취소</Text>
               </TouchableOpacity>
@@ -159,7 +247,11 @@ export default function MenuManageScreen({ navigation }: Props) {
                 disabled={saving}
               >
                 <Text style={styles.saveBtnText}>
-                  {saving ? "저장 중..." : "저장"}
+                  {saving
+                    ? "저장 중..."
+                    : modalMode === "create"
+                      ? "추가"
+                      : "저장"}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -172,7 +264,6 @@ export default function MenuManageScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f5f5f5" },
-  // 헤더
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -184,8 +275,7 @@ const styles = StyleSheet.create({
   backBtn: { fontSize: 14, color: "#aaa", fontWeight: "600" },
   headerTitle: { fontSize: 22, fontWeight: "800", color: "#fff" },
   refreshBtn: { fontSize: 20 },
-  // 리스트
-  list: { padding: 12 },
+  list: { padding: 12, paddingBottom: 100 },
   emptyText: {
     textAlign: "center",
     color: "#999",
@@ -214,7 +304,21 @@ const styles = StyleSheet.create({
   statusOn: { fontSize: 13, fontWeight: "700", color: "#2ecc71" },
   statusOff: { fontSize: 13, fontWeight: "700", color: "#e74c3c" },
   editHint: { fontSize: 11, color: "#bbb", marginTop: 4 },
-  // 모달
+  fab: {
+    position: "absolute",
+    right: 20,
+    bottom: 24,
+    backgroundColor: "#1a1a2e",
+    paddingHorizontal: 22,
+    paddingVertical: 16,
+    borderRadius: 30,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  fabText: { color: "#fff", fontSize: 16, fontWeight: "700" },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
@@ -256,6 +360,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 20,
   },
+  deleteBtn: {
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: "#fff0f0",
+    borderWidth: 1,
+    borderColor: "#e74c3c",
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  deleteBtnText: { fontSize: 15, fontWeight: "700", color: "#e74c3c" },
   modalActions: { flexDirection: "row", gap: 10 },
   cancelBtn: {
     flex: 1,
