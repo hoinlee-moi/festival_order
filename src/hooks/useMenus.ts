@@ -4,6 +4,7 @@ import { getCachedMenus, setCachedMenus } from "../lib/storage";
 import type { Menu } from "../types";
 
 const MENUS_QUERY_KEY = ["menus"];
+const ALL_MENUS_QUERY_KEY = ["menus", "all"];
 
 async function fetchMenus(): Promise<Menu[]> {
   try {
@@ -26,11 +27,30 @@ async function fetchMenus(): Promise<Menu[]> {
   }
 }
 
+async function fetchAllMenus(): Promise<Menu[]> {
+  const { data, error } = await supabase
+    .from("menus")
+    .select("*")
+    .order("sort_order", { ascending: true });
+
+  if (error) throw error;
+  return data as Menu[];
+}
+
 export function useMenus() {
   return useQuery({
     queryKey: MENUS_QUERY_KEY,
     queryFn: fetchMenus,
     staleTime: Infinity, // 수동 갱신 전까지 캐시 유지
+    gcTime: Infinity,
+  });
+}
+
+export function useAllMenus() {
+  return useQuery({
+    queryKey: ALL_MENUS_QUERY_KEY,
+    queryFn: fetchAllMenus,
+    staleTime: Infinity,
     gcTime: Infinity,
   });
 }

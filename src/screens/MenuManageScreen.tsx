@@ -11,10 +11,13 @@ import {
   ActivityIndicator,
   Switch,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList, Menu } from "../types";
-import { useMenus, useRefreshMenus } from "../hooks/useMenus";
+import { useAllMenus, useRefreshMenus } from "../hooks/useMenus";
 import { supabase } from "../lib/supabase";
 
 type Props = NativeStackScreenProps<RootStackParamList, "MenuManage">;
@@ -22,7 +25,8 @@ type Props = NativeStackScreenProps<RootStackParamList, "MenuManage">;
 type ModalMode = "create" | "edit";
 
 export default function MenuManageScreen({ navigation }: Props) {
-  const { data: menus = [], isLoading } = useMenus();
+  const insets = useSafeAreaInsets();
+  const { data: menus = [], isLoading } = useAllMenus();
   const refreshMenus = useRefreshMenus();
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -150,7 +154,7 @@ export default function MenuManageScreen({ navigation }: Props) {
       </View>
       <View style={styles.menuStatus}>
         <Text style={item.is_available ? styles.statusOn : styles.statusOff}>
-          {item.is_available ? "판매중" : "품절"}
+          {item.is_available ? "판매중" : "판매 중지"}
         </Text>
         <Text style={styles.editHint}>터치하여 수정</Text>
       </View>
@@ -158,7 +162,7 @@ export default function MenuManageScreen({ navigation }: Props) {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* 헤더 */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
@@ -186,7 +190,7 @@ export default function MenuManageScreen({ navigation }: Props) {
 
       {/* 추가 FAB */}
       <TouchableOpacity
-        style={styles.fab}
+        style={[styles.fab, { bottom: Math.max(insets.bottom + 16, 24) }]}
         activeOpacity={0.8}
         onPress={openCreate}
       >
@@ -219,9 +223,16 @@ export default function MenuManageScreen({ navigation }: Props) {
             />
 
             <View style={styles.switchRow}>
-              <Text style={styles.inputLabel}>판매 가능</Text>
+              <Text style={styles.inputLabel}>판매 상태</Text>
               <Switch value={editAvailable} onValueChange={setEditAvailable} />
             </View>
+            <Text
+              style={editAvailable ? styles.availableNote : styles.pausedNote}
+            >
+              {editAvailable
+                ? "카운터 주문 화면에 표시됩니다."
+                : "판매 중지 상태입니다. DB에는 남아 있고 주문 화면에서만 숨겨집니다."}
+            </Text>
 
             {modalMode === "edit" && (
               <TouchableOpacity
@@ -275,7 +286,7 @@ const styles = StyleSheet.create({
   backBtn: { fontSize: 14, color: "#aaa", fontWeight: "600" },
   headerTitle: { fontSize: 22, fontWeight: "800", color: "#fff" },
   refreshBtn: { fontSize: 20 },
-  list: { padding: 12, paddingBottom: 100 },
+  list: { padding: 12, paddingBottom: 120 },
   emptyText: {
     textAlign: "center",
     color: "#999",
@@ -358,6 +369,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    marginBottom: 8,
+  },
+  availableNote: {
+    fontSize: 13,
+    color: "#2ecc71",
+    fontWeight: "600",
+    marginBottom: 20,
+  },
+  pausedNote: {
+    fontSize: 13,
+    color: "#e67e22",
+    fontWeight: "600",
+    lineHeight: 18,
     marginBottom: 20,
   },
   deleteBtn: {

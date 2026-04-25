@@ -35,6 +35,22 @@ type Props = NativeStackScreenProps<RootStackParamList, "Counter">;
 // ===== 탭 종류 =====
 type Tab = "order" | "recent" | "sales";
 
+const getTodayString = () => new Date().toISOString().split("T")[0];
+
+const formatDate = (dateString: string) => {
+  const date = new Date(dateString);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const weekday = ["일", "월", "화", "수", "목", "금", "토"][date.getDay()];
+  return `${month}.${day} (${weekday})`;
+};
+
+const shiftDate = (dateString: string, days: number) => {
+  const date = new Date(dateString);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().split("T")[0];
+};
+
 export default function CounterScreen({ navigation }: Props) {
   const { width } = useWindowDimensions();
   const isWide = width >= 768;
@@ -43,6 +59,8 @@ export default function CounterScreen({ navigation }: Props) {
   const { data: menus = [], isLoading: menusLoading } = useMenus();
   const refreshMenus = useRefreshMenus();
   const { data: pendingOrders = [] } = useOrdersByStatus("PENDING");
+  const [recentDate, setRecentDate] = useState(getTodayString());
+  const { data: recentOrders = [] } = useOrdersByStatus("PENDING", recentDate);
   const { data: salesSummary } = useSalesSummary();
   const createOrder = useCreateOrder();
   const updateStatus = useUpdateOrderStatus();
@@ -253,13 +271,37 @@ export default function CounterScreen({ navigation }: Props) {
 
   const renderRecentOrders = () => (
     <View style={styles.recentSection}>
-      <Text style={styles.sectionTitle}>최근 주문 (PENDING)</Text>
-      {pendingOrders.length === 0 ? (
+      <View style={styles.recentHeaderRow}>
+        <Text style={styles.sectionTitle}>최근 주문 (PENDING)</Text>
+        <TouchableOpacity
+          style={styles.todaySmallBtn}
+          onPress={() => setRecentDate(getTodayString())}
+        >
+          <Text style={styles.todaySmallBtnText}>오늘</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={styles.dateSelectorRow}>
+        <TouchableOpacity
+          style={styles.dateMoveBtn}
+          onPress={() => setRecentDate((date) => shiftDate(date, -1))}
+        >
+          <Text style={styles.dateMoveBtnText}>이전</Text>
+        </TouchableOpacity>
+        <Text style={styles.dateSelectorText}>{formatDate(recentDate)}</Text>
+        <TouchableOpacity
+          style={styles.dateMoveBtn}
+          onPress={() => setRecentDate((date) => shiftDate(date, 1))}
+        >
+          <Text style={styles.dateMoveBtnText}>다음</Text>
+        </TouchableOpacity>
+      </View>
+      {recentOrders.length === 0 ? (
         <Text style={styles.emptyText}>대기 중인 주문이 없습니다</Text>
       ) : (
         <FlatList
-          data={[...pendingOrders].reverse()}
+          data={[...recentOrders].reverse()}
           keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.recentList}
           renderItem={({ item }) => (
             <View style={styles.recentCard}>
               <View style={styles.recentInfo}>
@@ -310,7 +352,7 @@ export default function CounterScreen({ navigation }: Props) {
   // ===== 와이드(태블릿): 좌측 메뉴 + 우측 장바구니, 하단 탭으로 최근주문/매출 =====
   // ===== 좁은(폰): 탭 전환 =====
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* 헤더 */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.navigate("RoleSelect")}>
@@ -407,7 +449,7 @@ export default function CounterScreen({ navigation }: Props) {
           {activeTab === "order" && (
             <ScrollView
               style={{ flex: 1 }}
-              contentContainerStyle={{ paddingBottom: 24 }}
+              contentContainerStyle={{ paddingBottom: 40 }}
             >
               {renderMenuGrid()}
               {renderCart()}
@@ -571,7 +613,7 @@ export default function CounterScreen({ navigation }: Props) {
 
 // ===== 스타일 =====
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f5f5f5", paddingBottom: 24 },
+  container: { flex: 1, backgroundColor: "#f5f5f5" },
   // 헤더
   header: {
     flexDirection: "row",
@@ -701,7 +743,38 @@ const styles = StyleSheet.create({
   checkoutBtnText: { fontSize: 16, fontWeight: "700", color: "#fff" },
   btnDisabled: { opacity: 0.5 },
   // 최근 주문
-  recentSection: { flex: 1, padding: 12 },
+  recentSection: { flex: 1, paddingHorizontal: 12, paddingTop: 12 },
+  recentHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  todaySmallBtn: {
+    backgroundColor: "#e8e8e8",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  todaySmallBtnText: { fontSize: 13, color: "#555", fontWeight: "700" },
+  dateSelectorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    padding: 8,
+    marginBottom: 10,
+  },
+  dateMoveBtn: {
+    backgroundColor: "#f0f0f0",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  dateMoveBtnText: { fontSize: 13, color: "#555", fontWeight: "700" },
+  dateSelectorText: { fontSize: 16, color: "#1a1a2e", fontWeight: "800" },
+  recentList: { paddingBottom: 40 },
   recentCard: {
     flexDirection: "row",
     backgroundColor: "#fff",
@@ -732,7 +805,12 @@ const styles = StyleSheet.create({
   },
   cancelBtnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   // 매출
-  salesSection: { flex: 1, padding: 12 },
+  salesSection: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 40,
+  },
   salesCard: {
     backgroundColor: "#fff",
     borderRadius: 12,

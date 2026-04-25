@@ -35,7 +35,7 @@ const roles = [
 
 export default function RoleSelectScreen({ navigation }: Props) {
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Text style={styles.title}>Festival Order</Text>
         <Text style={styles.subtitle}>역할을 선택하세요</Text>
@@ -85,7 +85,9 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "center",
     alignItems: "center",
-    padding: 24,
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 40,
   },
   title: {
     fontSize: 32,

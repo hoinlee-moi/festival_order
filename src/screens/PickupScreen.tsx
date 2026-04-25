@@ -12,8 +12,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useOrdersByStatus, useUpdateOrderStatus } from "../hooks/useOrders";
 import { useRealtimeOrders } from "../hooks/useRealtimeOrders";
+import { supabase } from "../lib/supabase";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { Order, RootStackParamList } from "../types";
+import type { Order, RootStackParamList, SmsStatus } from "../types";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Pickup">;
 
@@ -30,19 +31,44 @@ export default function PickupScreen({ navigation }: Props) {
   const updateStatus = useUpdateOrderStatus();
   useRealtimeOrders("READY");
 
-  // SMS 상태를 로컬로 관리 (더미)
-  const [smsStates, setSmsStates] = React.useState<Record<string, string>>({});
+  const [smsStates, setSmsStates] = React.useState<Record<string, SmsStatus>>(
+    {},
+  );
 
-  const handleSendSms = (orderId: string) => {
-    const current = smsStates[orderId];
+  const handleSendSms = async (order: Order) => {
+    const current = getSmsState(order);
     if (current === "SENDING") return;
 
-    setSmsStates((prev) => ({ ...prev, [orderId]: "SENDING" }));
+    setSmsStates((prev) => ({ ...prev, [order.id]: "SENDING" }));
 
-    // 2초 후 발송 완료로 변경 (더미)
-    setTimeout(() => {
-      setSmsStates((prev) => ({ ...prev, [orderId]: "SENT" }));
-    }, 2000);
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "send-pickup-sms",
+        {
+          body: { orderId: order.id },
+        },
+      );
+
+      if (error) {
+        const response = (error as { context?: Response }).context;
+        const errorBody = response
+          ? await response.json().catch(() => null)
+          : null;
+        throw new Error(errorBody?.error ?? error.message ?? "SMS 발송 실패");
+      }
+
+      if (data?.ok === false) {
+        throw new Error(data?.error ?? "SMS 발송 실패");
+      }
+
+      setSmsStates((prev) => ({ ...prev, [order.id]: "SENT" }));
+    } catch (error) {
+      setSmsStates((prev) => ({ ...prev, [order.id]: "FAILED" }));
+      Alert.alert(
+        "SMS 발송 실패",
+        error instanceof Error ? error.message : "메시지 발송에 실패했습니다.",
+      );
+    }
   };
 
   const handleComplete = (order: Order) => {
@@ -60,19 +86,22 @@ export default function PickupScreen({ navigation }: Props) {
     );
   };
 
-  const getSmsState = (orderId: string) => smsStates[orderId] || "NOT_SENT";
+  const getSmsState = (order: Order): SmsStatus =>
+    smsStates[order.id] || order.sms_status || "NOT_SENT";
 
-  const getSmsButtonStyle = (orderId: string) => {
-    const st = getSmsState(orderId);
+  const getSmsButtonStyle = (order: Order) => {
+    const st = getSmsState(order);
     if (st === "SENDING") return styles.smsSending;
     if (st === "SENT") return styles.smsSent;
+    if (st === "FAILED") return styles.smsFailed;
     return styles.smsDefault;
   };
 
-  const getSmsButtonText = (orderId: string) => {
-    const st = getSmsState(orderId);
+  const getSmsButtonText = (order: Order) => {
+    const st = getSmsState(order);
     if (st === "SENDING") return "발송 중...";
-    if (st === "SENT") return "✅ 발송 완료";
+    if (st === "SENT") return "발송 완료";
+    if (st === "FAILED") return "재발송";
     return "📲 SMS 발송";
   };
 
@@ -96,12 +125,12 @@ export default function PickupScreen({ navigation }: Props) {
       {/* 버튼 영역 */}
       <View style={styles.cardActions}>
         <TouchableOpacity
-          style={[styles.smsBtn, getSmsButtonStyle(item.id)]}
+          style={[styles.smsBtn, getSmsButtonStyle(item)]}
           activeOpacity={0.7}
-          onPress={() => handleSendSms(item.id)}
-          disabled={getSmsState(item.id) === "SENDING"}
+          onPress={() => handleSendSms(item)}
+          disabled={getSmsState(item) === "SENDING"}
         >
-          <Text style={styles.smsBtnText}>{getSmsButtonText(item.id)}</Text>
+          <Text style={styles.smsBtnText}>{getSmsButtonText(item)}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.doneBtn}
@@ -115,7 +144,7 @@ export default function PickupScreen({ navigation }: Props) {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* 헤더 */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.navigate("RoleSelect")}>
@@ -173,7 +202,7 @@ const styles = StyleSheet.create({
   emptyEmoji: { fontSize: 60, marginBottom: 12 },
   emptyText: { fontSize: 20, color: "#aaa", fontWeight: "600" },
   // 리스트
-  list: { padding: 12 },
+  list: { padding: 12, paddingBottom: 40 },
   orderCard: {
     backgroundColor: "#fff",
     borderRadius: 16,
@@ -219,6 +248,7 @@ const styles = StyleSheet.create({
   smsDefault: { backgroundColor: "#3498db" },
   smsSending: { backgroundColor: "#95a5a6", opacity: 0.7 },
   smsSent: { backgroundColor: "#27ae60" },
+  smsFailed: { backgroundColor: "#e74c3c" },
   smsBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
   doneBtn: {
     flex: 1,

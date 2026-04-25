@@ -17,11 +17,22 @@ import type { Order, RootStackParamList } from "../types";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Kitchen">;
 
+const getTodayString = () => new Date().toISOString().split("T")[0];
+
+function formatPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length !== 11) return phone;
+  return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+}
+
 export default function KitchenScreen({ navigation }: Props) {
   const { width } = useWindowDimensions();
   const isWide = width >= 768;
 
-  const { data: orders = [], isLoading } = useOrdersByStatus("PENDING");
+  const { data: orders = [], isLoading } = useOrdersByStatus(
+    "PENDING",
+    getTodayString(),
+  );
   const updateStatus = useUpdateOrderStatus();
   useRealtimeOrders("PENDING");
 
@@ -61,6 +72,8 @@ export default function KitchenScreen({ navigation }: Props) {
         <Text style={styles.numberText}>#{item.order_number}</Text>
       </View>
 
+      <Text style={styles.phoneText}>{formatPhone(item.phone_number)}</Text>
+
       {/* 메뉴 목록 */}
       <View style={styles.itemsList}>
         {item.items.map((menuItem, idx) => (
@@ -83,7 +96,7 @@ export default function KitchenScreen({ navigation }: Props) {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* 헤더 */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.navigate("RoleSelect")}>
@@ -91,7 +104,7 @@ export default function KitchenScreen({ navigation }: Props) {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>🍳 주방</Text>
         <View style={styles.badge}>
-          <Text style={styles.badgeText}>{orders.length}건 대기</Text>
+          <Text style={styles.badgeText}>오늘 {orders.length}건 대기</Text>
         </View>
       </View>
 
@@ -100,7 +113,7 @@ export default function KitchenScreen({ navigation }: Props) {
       ) : orders.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyEmoji}>✨</Text>
-          <Text style={styles.emptyText}>대기 중인 주문이 없습니다</Text>
+          <Text style={styles.emptyText}>오늘 대기 중인 주문이 없습니다</Text>
         </View>
       ) : (
         <FlatList
@@ -141,7 +154,7 @@ const styles = StyleSheet.create({
   emptyEmoji: { fontSize: 60, marginBottom: 12 },
   emptyText: { fontSize: 20, color: "#aaa", fontWeight: "600" },
   // 리스트
-  list: { padding: 12 },
+  list: { padding: 12, paddingBottom: 40 },
   orderCard: {
     backgroundColor: "#fff",
     borderRadius: 16,
@@ -164,6 +177,12 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   numberText: { fontSize: 28, fontWeight: "900", color: "#ffd460" },
+  phoneText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#666",
+    marginBottom: 12,
+  },
   // 메뉴 아이템
   itemsList: { marginBottom: 16 },
   menuRow: {
