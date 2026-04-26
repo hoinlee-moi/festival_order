@@ -1,6 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
-import { getCachedMenus, setCachedMenus } from "../lib/storage";
+import {
+  getCachedAllMenus,
+  getCachedMenus,
+  setCachedAllMenus,
+  setCachedMenus,
+} from "../lib/storage";
 import type { Menu } from "../types";
 
 const MENUS_QUERY_KEY = ["menus"];
@@ -28,13 +33,22 @@ async function fetchMenus(): Promise<Menu[]> {
 }
 
 async function fetchAllMenus(): Promise<Menu[]> {
-  const { data, error } = await supabase
-    .from("menus")
-    .select("*")
-    .order("sort_order", { ascending: true });
+  try {
+    const { data, error } = await supabase
+      .from("menus")
+      .select("*")
+      .order("sort_order", { ascending: true });
 
-  if (error) throw error;
-  return data as Menu[];
+    if (error) throw error;
+
+    const menus = data as Menu[];
+    await setCachedAllMenus(menus);
+    return menus;
+  } catch {
+    const cached = await getCachedAllMenus();
+    if (cached) return cached;
+    throw new Error("메뉴를 불러올 수 없습니다. 네트워크 연결을 확인하세요.");
+  }
 }
 
 export function useMenus() {

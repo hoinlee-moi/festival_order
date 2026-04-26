@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useMenus, useRefreshMenus } from "../hooks/useMenus";
 import {
   useCreateOrder,
+  useOrdersByDate,
   useOrdersByStatus,
   useUpdateOrderStatus,
   useSalesSummary,
@@ -52,16 +53,22 @@ const shiftDate = (dateString: string, days: number) => {
 };
 
 export default function CounterScreen({ navigation }: Props) {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const isWide = width >= 768;
 
   // 데이터
-  const { data: menus = [], isLoading: menusLoading } = useMenus();
+  const {
+    data: menus = [],
+    isLoading: menusLoading,
+    isError: menusError,
+  } = useMenus();
   const refreshMenus = useRefreshMenus();
-  const { data: pendingOrders = [] } = useOrdersByStatus("PENDING");
+  const { data: pendingOrders = [], isError: pendingOrdersError } =
+    useOrdersByStatus("PENDING");
   const [recentDate, setRecentDate] = useState(getTodayString());
-  const { data: recentOrders = [] } = useOrdersByStatus("PENDING", recentDate);
-  const { data: salesSummary } = useSalesSummary();
+  const { data: recentOrders = [], isError: recentOrdersError } =
+    useOrdersByDate(recentDate);
+  const { data: salesSummary, isError: salesError } = useSalesSummary();
   const createOrder = useCreateOrder();
   const updateStatus = useUpdateOrderStatus();
 
@@ -172,9 +179,26 @@ export default function CounterScreen({ navigation }: Props) {
         text: "취소하기",
         style: "destructive",
         onPress: () =>
-          updateStatus.mutate({ id: order.id, status: "CANCELLED" }),
+          updateStatus.mutate(
+            { id: order.id, status: "CANCELLED" },
+            {
+              onError: () => {
+                Alert.alert(
+                  "오류",
+                  "주문 취소에 실패했습니다. 네트워크 연결을 확인하세요.",
+                );
+              },
+            },
+          ),
       },
     ]);
+  };
+
+  const getStatusLabel = (status: Order["status"]) => {
+    if (status === "PENDING") return "대기";
+    if (status === "READY") return "준비완료";
+    if (status === "COMPLETED") return "완료";
+    return "취소";
   };
 
   // ===== 거스름돈 =====
@@ -190,6 +214,11 @@ export default function CounterScreen({ navigation }: Props) {
           <Text style={styles.refreshBtnText}>🔄 새로고침</Text>
         </TouchableOpacity>
       </View>
+      {menusError && (
+        <Text style={styles.errorText}>
+          메뉴를 불러오지 못했습니다. 네트워크 연결을 확인하세요.
+        </Text>
+      )}
       {menusLoading ? (
         <ActivityIndicator size="large" style={{ marginTop: 40 }} />
       ) : (
@@ -272,7 +301,7 @@ export default function CounterScreen({ navigation }: Props) {
   const renderRecentOrders = () => (
     <View style={styles.recentSection}>
       <View style={styles.recentHeaderRow}>
-        <Text style={styles.sectionTitle}>최근 주문 (PENDING)</Text>
+        <Text style={styles.sectionTitle}>날짜별 주문</Text>
         <TouchableOpacity
           style={styles.todaySmallBtn}
           onPress={() => setRecentDate(getTodayString())}
@@ -295,17 +324,34 @@ export default function CounterScreen({ navigation }: Props) {
           <Text style={styles.dateMoveBtnText}>다음</Text>
         </TouchableOpacity>
       </View>
-      {recentOrders.length === 0 ? (
-        <Text style={styles.emptyText}>대기 중인 주문이 없습니다</Text>
+      {recentOrdersError ? (
+        <Text style={styles.errorText}>
+          주문 목록을 불러오지 못했습니다. 네트워크 연결을 확인하세요.
+        </Text>
+      ) : recentOrders.length === 0 ? (
+        <Text style={styles.emptyText}>해당 날짜의 주문이 없습니다</Text>
       ) : (
         <FlatList
-          data={[...recentOrders].reverse()}
+          data={recentOrders}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.recentList}
           renderItem={({ item }) => (
             <View style={styles.recentCard}>
               <View style={styles.recentInfo}>
-                <Text style={styles.recentNumber}>#{item.order_number}</Text>
+                <View style={styles.recentTopRow}>
+                  <Text style={styles.recentNumber}>#{item.order_number}</Text>
+                  <Text
+                    style={[
+                      styles.statusBadge,
+                      item.status === "PENDING" && styles.statusPending,
+                      item.status === "READY" && styles.statusReady,
+                      item.status === "COMPLETED" && styles.statusCompleted,
+                      item.status === "CANCELLED" && styles.statusCancelled,
+                    ]}
+                  >
+                    {getStatusLabel(item.status)}
+                  </Text>
+                </View>
                 <Text style={styles.recentItems}>
                   {item.items
                     .map((i) => `${i.menuName}×${i.quantity}`)
@@ -315,12 +361,14 @@ export default function CounterScreen({ navigation }: Props) {
                   {item.total_price.toLocaleString()}원
                 </Text>
               </View>
-              <TouchableOpacity
-                style={styles.cancelBtn}
-                onPress={() => handleCancelOrder(item)}
-              >
-                <Text style={styles.cancelBtnText}>취소</Text>
-              </TouchableOpacity>
+              {item.status === "PENDING" && (
+                <TouchableOpacity
+                  style={styles.cancelBtn}
+                  onPress={() => handleCancelOrder(item)}
+                >
+                  <Text style={styles.cancelBtnText}>취소</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
         />
@@ -331,6 +379,11 @@ export default function CounterScreen({ navigation }: Props) {
   const renderSales = () => (
     <View style={styles.salesSection}>
       <Text style={styles.sectionTitle}>당일 매출</Text>
+      {salesError && (
+        <Text style={styles.errorText}>
+          매출 정보를 불러오지 못했습니다. 네트워크 연결을 확인하세요.
+        </Text>
+      )}
       <View style={styles.salesCard}>
         <View style={styles.salesRow}>
           <Text style={styles.salesLabel}>총 매출액</Text>
@@ -360,7 +413,9 @@ export default function CounterScreen({ navigation }: Props) {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>🧾 카운터</Text>
         <Text style={styles.headerOrderNum}>
-          다음 대기번호: #{nextOrderNumber}
+          {pendingOrdersError
+            ? "대기번호 확인 불가"
+            : `다음 대기번호: #${nextOrderNumber}`}
         </Text>
       </View>
 
@@ -463,125 +518,154 @@ export default function CounterScreen({ navigation }: Props) {
       {/* ===== 결제 모달 ===== */}
       <Modal visible={showModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>주문 확인</Text>
+          <View style={[styles.modalContent, { maxHeight: height * 0.9 }]}>
+            <ScrollView
+              style={styles.modalBodyScroll}
+              contentContainerStyle={styles.modalBodyContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.modalTitle}>주문 확인</Text>
 
-            {/* 주문 요약 */}
-            <View style={styles.modalSummary}>
-              {cart.map((item) => (
-                <Text key={item.menuId} style={styles.modalItem}>
-                  {item.menuName} × {item.quantity} ={" "}
-                  {(item.price * item.quantity).toLocaleString()}원
+              {/* 주문 요약 */}
+              <View style={styles.modalSummary}>
+                {cart.map((item) => (
+                  <Text key={item.menuId} style={styles.modalItem}>
+                    {item.menuName} × {item.quantity} ={" "}
+                    {(item.price * item.quantity).toLocaleString()}원
+                  </Text>
+                ))}
+                <Text style={styles.modalTotal}>
+                  합계: {totalPrice.toLocaleString()}원
                 </Text>
-              ))}
-              <Text style={styles.modalTotal}>
-                합계: {totalPrice.toLocaleString()}원
-              </Text>
-            </View>
+              </View>
 
-            {/* 전화번호 입력 */}
-            <Text style={styles.inputLabel}>전화번호</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="01012345678"
-              keyboardType="phone-pad"
-              maxLength={11}
-              value={phone}
-              onChangeText={setPhone}
-            />
+              {/* 전화번호 입력 */}
+              <Text style={styles.inputLabel}>전화번호</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="01012345678"
+                keyboardType="phone-pad"
+                maxLength={11}
+                value={phone}
+                onChangeText={setPhone}
+              />
 
-            {/* 결제 수단 선택 */}
-            <Text style={styles.inputLabel}>결제 수단</Text>
-            <View style={styles.payTabRow}>
-              <TouchableOpacity
-                style={[
-                  styles.payTab,
-                  paymentMethod === "CASH" && styles.payTabActive,
-                ]}
-                onPress={() => setPaymentMethod("CASH")}
-              >
-                <Text
+              {/* 결제 수단 선택 */}
+              <Text style={styles.inputLabel}>결제 수단</Text>
+              <View style={styles.payTabRow}>
+                <TouchableOpacity
                   style={[
-                    styles.payTabText,
-                    paymentMethod === "CASH" && styles.payTabTextActive,
+                    styles.payTab,
+                    styles.payTabCash,
+                    paymentMethod === "CASH" && styles.payTabActive,
                   ]}
+                  onPress={() => setPaymentMethod("CASH")}
                 >
-                  💵 현금
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.payTab,
-                  paymentMethod === "CARD" && styles.payTabActive,
-                ]}
-                onPress={() => setPaymentMethod("CARD")}
-              >
-                <Text
-                  style={[
-                    styles.payTabText,
-                    paymentMethod === "CARD" && styles.payTabTextActive,
-                  ]}
-                >
-                  💳 카드
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* 거스름돈 계산 (현금 결제 시만) */}
-            {paymentMethod === "CASH" && (
-              <>
-                <Text style={styles.inputLabel}>받은 금액</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="금액 입력"
-                  keyboardType="number-pad"
-                  value={receivedCash}
-                  onChangeText={setReceivedCash}
-                />
-                <View style={styles.cashShortcuts}>
-                  <TouchableOpacity
-                    style={styles.cashBtn}
-                    onPress={() =>
-                      setReceivedCash((prev) =>
-                        String((parseInt(prev, 10) || 0) + 10000),
-                      )
-                    }
-                  >
-                    <Text style={styles.cashBtnText}>+1만원</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.cashBtn}
-                    onPress={() =>
-                      setReceivedCash((prev) =>
-                        String((parseInt(prev, 10) || 0) + 50000),
-                      )
-                    }
-                  >
-                    <Text style={styles.cashBtnText}>5만원</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.cashBtn}
-                    onPress={() => setReceivedCash(String(totalPrice))}
-                  >
-                    <Text style={styles.cashBtnText}>금액 맞음</Text>
-                  </TouchableOpacity>
-                </View>
-                {cashNum > 0 && (
                   <Text
                     style={[
-                      styles.changeText,
-                      change < 0 && styles.changeNegative,
+                      styles.payTabIcon,
+                      paymentMethod === "CASH" && styles.payTabTextActive,
                     ]}
                   >
-                    거스름돈:{" "}
-                    {change >= 0 ? `${change.toLocaleString()}원` : "부족"}
+                    💵
                   </Text>
-                )}
-              </>
-            )}
+                  <Text
+                    style={[
+                      styles.payTabText,
+                      paymentMethod === "CASH" && styles.payTabTextActive,
+                    ]}
+                  >
+                    현금
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.payTab,
+                    styles.payTabCard,
+                    paymentMethod === "CARD" && styles.payTabActive,
+                  ]}
+                  onPress={() => setPaymentMethod("CARD")}
+                >
+                  <Text
+                    style={[
+                      styles.payTabIcon,
+                      paymentMethod === "CARD" && styles.payTabTextActive,
+                    ]}
+                  >
+                    💳
+                  </Text>
+                  <Text
+                    style={[
+                      styles.payTabText,
+                      paymentMethod === "CARD" && styles.payTabTextActive,
+                    ]}
+                  >
+                    카드
+                  </Text>
+                </TouchableOpacity>
+              </View>
 
-            {/* 대기번호 */}
-            <Text style={styles.nextNumber}>대기번호 #{nextOrderNumber}</Text>
+              {/* 거스름돈 계산 (현금 결제 시만) */}
+              <View style={styles.cashDetailsSlot}>
+                {paymentMethod === "CASH" ? (
+                  <>
+                    <Text style={styles.inputLabel}>받은 금액</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="금액 입력"
+                      keyboardType="number-pad"
+                      value={receivedCash}
+                      onChangeText={setReceivedCash}
+                    />
+                    <View style={styles.cashShortcuts}>
+                      <TouchableOpacity
+                        style={styles.cashBtn}
+                        onPress={() =>
+                          setReceivedCash((prev) =>
+                            String((parseInt(prev, 10) || 0) + 10000),
+                          )
+                        }
+                      >
+                        <Text style={styles.cashBtnText}>+1만원</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.cashBtn}
+                        onPress={() =>
+                          setReceivedCash((prev) =>
+                            String((parseInt(prev, 10) || 0) + 50000),
+                          )
+                        }
+                      >
+                        <Text style={styles.cashBtnText}>5만원</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.cashBtn}
+                        onPress={() => setReceivedCash(String(totalPrice))}
+                      >
+                        <Text style={styles.cashBtnText}>금액 맞음</Text>
+                      </TouchableOpacity>
+                    </View>
+                    {cashNum > 0 ? (
+                      <Text
+                        style={[
+                          styles.changeText,
+                          change < 0 && styles.changeNegative,
+                        ]}
+                      >
+                        거스름돈:
+                        {change >= 0 ? `${change.toLocaleString()}원` : "부족"}
+                      </Text>
+                    ) : (
+                      <Text style={styles.changeTextPlaceholder}> </Text>
+                    )}
+                  </>
+                ) : null}
+              </View>
+
+              {/* 대기번호 */}
+              <Text style={styles.nextNumber}>대기번호 #{nextOrderNumber}</Text>
+            </ScrollView>
 
             {/* 버튼 */}
             <View style={styles.modalActions}>
@@ -678,6 +762,12 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 20,
     fontSize: 14,
+  },
+  errorText: {
+    color: "#c0392b",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 8,
   },
   cartList: { maxHeight: 180 },
   cartItem: {
@@ -789,7 +879,26 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   recentInfo: { flex: 1 },
+  recentTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 2,
+  },
   recentNumber: { fontSize: 20, fontWeight: "800", color: "#1a1a2e" },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    overflow: "hidden",
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#fff",
+  },
+  statusPending: { backgroundColor: "#e67e22" },
+  statusReady: { backgroundColor: "#3498db" },
+  statusCompleted: { backgroundColor: "#27ae60" },
+  statusCancelled: { backgroundColor: "#95a5a6" },
   recentItems: { fontSize: 13, color: "#666", marginTop: 2 },
   recentTotal: {
     fontSize: 14,
@@ -837,26 +946,29 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
     alignItems: "center",
-    padding: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   modalContent: {
     backgroundColor: "#fff",
     borderRadius: 16,
-    padding: 24,
+    padding: 18,
     width: "100%",
     maxWidth: 420,
   },
+  modalBodyScroll: { flexShrink: 1 },
+  modalBodyContent: { paddingBottom: 4 },
   modalTitle: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: "800",
     color: "#1a1a2e",
-    marginBottom: 16,
+    marginBottom: 10,
   },
   modalSummary: {
     backgroundColor: "#f8f8f8",
-    padding: 12,
+    padding: 10,
     borderRadius: 8,
-    marginBottom: 16,
+    marginBottom: 10,
   },
   modalItem: { fontSize: 14, color: "#555", marginBottom: 4 },
   modalTotal: {
@@ -872,38 +984,44 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: "#333",
-    marginBottom: 4,
+    marginBottom: 3,
   },
   input: {
     borderWidth: 1,
     borderColor: "#ddd",
     borderRadius: 10,
     paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingVertical: 9,
     fontSize: 16,
-    marginBottom: 12,
+    marginBottom: 8,
   },
+  cashDetailsSlot: { minHeight: 118 },
   cashShortcuts: { flexDirection: "row", gap: 8, marginBottom: 8 },
-  payTabRow: { flexDirection: "row", gap: 8, marginBottom: 14 },
+  payTabRow: { flexDirection: "row", gap: 8, marginBottom: 10 },
   payTab: {
     flex: 1,
-    paddingVertical: 12,
+    minHeight: 58,
+    paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: "#f0f0f0",
+    backgroundColor: "#f7f7f7",
     alignItems: "center",
+    justifyContent: "center",
     borderWidth: 2,
-    borderColor: "transparent",
+    borderColor: "#d8d8d8",
   },
+  payTabCash: { backgroundColor: "#fffaf0" },
+  payTabCard: { backgroundColor: "#f0f6ff" },
   payTabActive: {
     backgroundColor: "#fff",
     borderColor: "#1a1a2e",
   },
-  payTabText: { fontSize: 15, fontWeight: "700", color: "#999" },
+  payTabIcon: { fontSize: 18, marginBottom: 1, color: "#777" },
+  payTabText: { fontSize: 17, fontWeight: "800", color: "#555" },
   payTabTextActive: { color: "#1a1a2e" },
   cashBtn: {
     flex: 1,
     backgroundColor: "#f0f0f0",
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderRadius: 8,
     alignItems: "center",
   },
@@ -914,18 +1032,22 @@ const styles = StyleSheet.create({
     color: "#2ecc71",
     marginBottom: 12,
   },
+  changeTextPlaceholder: {
+    fontSize: 16,
+    marginBottom: 12,
+  },
   changeNegative: { color: "#e74c3c" },
   nextNumber: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: "800",
     color: "#1a1a2e",
     textAlign: "center",
-    marginVertical: 12,
+    marginVertical: 8,
   },
   modalActions: { flexDirection: "row", gap: 10, marginTop: 8 },
   modalCancelBtn: {
     flex: 1,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderRadius: 10,
     backgroundColor: "#e0e0e0",
     alignItems: "center",
@@ -933,7 +1055,7 @@ const styles = StyleSheet.create({
   modalCancelText: { fontSize: 16, fontWeight: "700", color: "#555" },
   modalSubmitBtn: {
     flex: 2,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderRadius: 10,
     backgroundColor: "#1a1a2e",
     alignItems: "center",

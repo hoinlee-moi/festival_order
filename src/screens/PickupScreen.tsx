@@ -18,16 +18,17 @@ import type { Order, RootStackParamList, SmsStatus } from "../types";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Pickup">;
 
-function maskPhone(phone: string): string {
-  if (phone.length < 7) return phone;
-  return phone.slice(0, 3) + "-****-" + phone.slice(-4);
+function formatPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length !== 11) return phone;
+  return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
 }
 
 export default function PickupScreen({ navigation }: Props) {
   const { width } = useWindowDimensions();
   const isWide = width >= 768;
 
-  const { data: orders = [], isLoading } = useOrdersByStatus("READY");
+  const { data: orders = [], isLoading, isError } = useOrdersByStatus("READY");
   const updateStatus = useUpdateOrderStatus();
   useRealtimeOrders("READY");
 
@@ -37,7 +38,13 @@ export default function PickupScreen({ navigation }: Props) {
 
   const handleSendSms = async (order: Order) => {
     const current = getSmsState(order);
-    if (current === "SENDING") return;
+    if (
+      current === "SENDING" ||
+      current === "SENT" ||
+      current === "SEND_UNKNOWN"
+    ) {
+      return;
+    }
 
     setSmsStates((prev) => ({ ...prev, [order.id]: "SENDING" }));
 
@@ -54,19 +61,42 @@ export default function PickupScreen({ navigation }: Props) {
         const errorBody = response
           ? await response.json().catch(() => null)
           : null;
-        throw new Error(errorBody?.error ?? error.message ?? "SMS 발송 실패");
+        const status = errorBody?.status as SmsStatus | undefined;
+        setSmsStates((prev) => ({
+          ...prev,
+          [order.id]: status ?? "SEND_UNKNOWN",
+        }));
+        throw new Error(
+          errorBody?.error ??
+            error.message ??
+            "SMS 요청 결과를 확인하지 못했습니다.",
+        );
       }
 
       if (data?.ok === false) {
+        const status = data?.status as SmsStatus | undefined;
+        setSmsStates((prev) => ({
+          ...prev,
+          [order.id]: status ?? "FAILED",
+        }));
         throw new Error(data?.error ?? "SMS 발송 실패");
       }
 
-      setSmsStates((prev) => ({ ...prev, [order.id]: "SENT" }));
+      setSmsStates((prev) => ({
+        ...prev,
+        [order.id]: (data?.status as SmsStatus | undefined) ?? "SENT",
+      }));
     } catch (error) {
-      setSmsStates((prev) => ({ ...prev, [order.id]: "FAILED" }));
+      setSmsStates((prev) => ({
+        ...prev,
+        [order.id]:
+          prev[order.id] === "SENDING" ? "SEND_UNKNOWN" : prev[order.id],
+      }));
       Alert.alert(
-        "SMS 발송 실패",
-        error instanceof Error ? error.message : "메시지 발송에 실패했습니다.",
+        "SMS 상태 확인 필요",
+        error instanceof Error
+          ? error.message
+          : "메시지 요청 결과를 확인하지 못했습니다.",
       );
     }
   };
@@ -80,19 +110,37 @@ export default function PickupScreen({ navigation }: Props) {
         {
           text: "완료",
           onPress: () =>
-            updateStatus.mutate({ id: order.id, status: "COMPLETED" }),
+            updateStatus.mutate(
+              { id: order.id, status: "COMPLETED" },
+              {
+                onError: () => {
+                  Alert.alert(
+                    "오류",
+                    "최종 완료 처리에 실패했습니다. 네트워크 연결을 확인하세요.",
+                  );
+                },
+              },
+            ),
         },
       ],
     );
   };
 
-  const getSmsState = (order: Order): SmsStatus =>
-    smsStates[order.id] || order.sms_status || "NOT_SENT";
+  const getSmsState = (order: Order): SmsStatus => {
+    const localState = smsStates[order.id];
+    const serverState = order.sms_status || "NOT_SENT";
+    if (localState === "SENDING") return localState;
+    if (serverState !== "NOT_SENT" && localState !== serverState) {
+      return serverState;
+    }
+    return localState || serverState;
+  };
 
   const getSmsButtonStyle = (order: Order) => {
     const st = getSmsState(order);
     if (st === "SENDING") return styles.smsSending;
     if (st === "SENT") return styles.smsSent;
+    if (st === "SEND_UNKNOWN") return styles.smsUnknown;
     if (st === "FAILED") return styles.smsFailed;
     return styles.smsDefault;
   };
@@ -101,8 +149,23 @@ export default function PickupScreen({ navigation }: Props) {
     const st = getSmsState(order);
     if (st === "SENDING") return "발송 중...";
     if (st === "SENT") return "발송 완료";
+    if (st === "SEND_UNKNOWN") return "확인 필요";
     if (st === "FAILED") return "재발송";
     return "📲 SMS 발송";
+  };
+
+  const getSmsStatusText = (order: Order) => {
+    const st = getSmsState(order);
+    if (st === "SENDING") return "SMS 발송 요청 처리 중";
+    if (st === "SENT") return "SMS 발송 확인됨";
+    if (st === "SEND_UNKNOWN") return "요청 결과 불명확 - 중복 발송 방지 중";
+    if (st === "FAILED") return "발송 실패 - 재시도 가능";
+    return "SMS 미발송";
+  };
+
+  const isSmsButtonDisabled = (order: Order) => {
+    const st = getSmsState(order);
+    return st === "SENDING" || st === "SENT" || st === "SEND_UNKNOWN";
   };
 
   const renderOrderCard = ({ item }: { item: Order }) => (
@@ -110,7 +173,7 @@ export default function PickupScreen({ navigation }: Props) {
       {/* 상단: 대기번호 + 전화번호 */}
       <View style={styles.cardHeader}>
         <Text style={styles.orderNumber}>#{item.order_number}</Text>
-        <Text style={styles.phone}>{maskPhone(item.phone_number)}</Text>
+        <Text style={styles.phone}>{formatPhone(item.phone_number)}</Text>
       </View>
 
       {/* 메뉴 목록 */}
@@ -122,13 +185,15 @@ export default function PickupScreen({ navigation }: Props) {
         ))}
       </View>
 
+      <Text style={styles.smsStatusText}>{getSmsStatusText(item)}</Text>
+
       {/* 버튼 영역 */}
       <View style={styles.cardActions}>
         <TouchableOpacity
           style={[styles.smsBtn, getSmsButtonStyle(item)]}
           activeOpacity={0.7}
           onPress={() => handleSendSms(item)}
-          disabled={getSmsState(item) === "SENDING"}
+          disabled={isSmsButtonDisabled(item)}
         >
           <Text style={styles.smsBtnText}>{getSmsButtonText(item)}</Text>
         </TouchableOpacity>
@@ -158,6 +223,12 @@ export default function PickupScreen({ navigation }: Props) {
 
       {isLoading ? (
         <ActivityIndicator size="large" style={{ marginTop: 60 }} />
+      ) : isError ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyText}>
+            주문 목록을 불러오지 못했습니다. 네트워크 연결을 확인하세요.
+          </Text>
+        </View>
       ) : orders.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyEmoji}>☕</Text>
@@ -248,8 +319,15 @@ const styles = StyleSheet.create({
   smsDefault: { backgroundColor: "#3498db" },
   smsSending: { backgroundColor: "#95a5a6", opacity: 0.7 },
   smsSent: { backgroundColor: "#27ae60" },
+  smsUnknown: { backgroundColor: "#f39c12" },
   smsFailed: { backgroundColor: "#e74c3c" },
   smsBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  smsStatusText: {
+    color: "#666",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 12,
+  },
   doneBtn: {
     flex: 1,
     paddingVertical: 14,

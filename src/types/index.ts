@@ -10,7 +10,12 @@ export interface Menu {
 
 // ===== Order =====
 export type OrderStatus = "PENDING" | "READY" | "COMPLETED" | "CANCELLED";
-export type SmsStatus = "NOT_SENT" | "SENDING" | "SENT" | "FAILED";
+export type SmsStatus =
+  | "NOT_SENT"
+  | "SENDING"
+  | "SENT"
+  | "FAILED"
+  | "SEND_UNKNOWN";
 export type PaymentMethod = "CASH" | "CARD";
 
 export interface OrderItem {

@@ -7,6 +7,7 @@ import {
   FlatList,
   useWindowDimensions,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Audio } from "expo-av";
@@ -29,10 +30,11 @@ export default function KitchenScreen({ navigation }: Props) {
   const { width } = useWindowDimensions();
   const isWide = width >= 768;
 
-  const { data: orders = [], isLoading } = useOrdersByStatus(
-    "PENDING",
-    getTodayString(),
-  );
+  const {
+    data: orders = [],
+    isLoading,
+    isError,
+  } = useOrdersByStatus("PENDING", getTodayString());
   const updateStatus = useUpdateOrderStatus();
   useRealtimeOrders("PENDING");
 
@@ -62,7 +64,17 @@ export default function KitchenScreen({ navigation }: Props) {
   };
 
   const handleComplete = (order: Order) => {
-    updateStatus.mutate({ id: order.id, status: "READY" });
+    updateStatus.mutate(
+      { id: order.id, status: "READY" },
+      {
+        onError: () => {
+          Alert.alert(
+            "오류",
+            "요리 완료 처리에 실패했습니다. 네트워크 연결을 확인하세요.",
+          );
+        },
+      },
+    );
   };
 
   const renderOrderCard = ({ item }: { item: Order }) => (
@@ -110,6 +122,12 @@ export default function KitchenScreen({ navigation }: Props) {
 
       {isLoading ? (
         <ActivityIndicator size="large" style={{ marginTop: 60 }} />
+      ) : isError ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyText}>
+            주문 목록을 불러오지 못했습니다. 네트워크 연결을 확인하세요.
+          </Text>
+        </View>
       ) : orders.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyEmoji}>✨</Text>

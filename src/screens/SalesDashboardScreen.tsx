@@ -41,8 +41,13 @@ export default function SalesDashboardScreen({ navigation }: Props) {
   const [selectedDate, setSelectedDate] = useState(getTodayString());
   const isToday = selectedDate === getTodayString();
 
-  const { data: salesSummary, isLoading } = useSalesSummary(selectedDate);
-  const { data: completedOrders = [] } = useCompletedOrdersByDate(selectedDate);
+  const {
+    data: salesSummary,
+    isLoading,
+    isError: salesError,
+  } = useSalesSummary(selectedDate);
+  const { data: completedOrders = [], isError: completedOrdersError } =
+    useCompletedOrdersByDate(selectedDate);
   const closeSession = useCloseSession();
 
   useRealtimeOrders(["PENDING", "READY", "COMPLETED"]);
@@ -126,6 +131,12 @@ export default function SalesDashboardScreen({ navigation }: Props) {
 
       {isLoading ? (
         <ActivityIndicator size="large" style={{ marginTop: 60 }} />
+      ) : salesError || completedOrdersError ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>
+            매출 정보를 불러오지 못했습니다. 네트워크 연결을 확인하세요.
+          </Text>
+        </View>
       ) : (
         <View style={styles.body}>
           <View style={styles.totalCard}>
@@ -286,6 +297,18 @@ const styles = StyleSheet.create({
     color: "#999",
     fontSize: 15,
     marginTop: 30,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  errorText: {
+    color: "#c0392b",
+    fontSize: 16,
+    fontWeight: "700",
+    textAlign: "center",
   },
   closeBtn: {
     backgroundColor: "#e74c3c",

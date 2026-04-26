@@ -26,7 +26,7 @@ type ModalMode = "create" | "edit";
 
 export default function MenuManageScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
-  const { data: menus = [], isLoading } = useAllMenus();
+  const { data: menus = [], isLoading, isError } = useAllMenus();
   const refreshMenus = useRefreshMenus();
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -176,6 +176,10 @@ export default function MenuManageScreen({ navigation }: Props) {
 
       {isLoading ? (
         <ActivityIndicator size="large" style={{ marginTop: 60 }} />
+      ) : isError ? (
+        <Text style={styles.errorText}>
+          메뉴를 불러오지 못했습니다. 네트워크 연결을 확인하세요.
+        </Text>
       ) : (
         <FlatList
           data={menus}
@@ -292,6 +296,14 @@ const styles = StyleSheet.create({
     color: "#999",
     fontSize: 16,
     marginTop: 40,
+  },
+  errorText: {
+    textAlign: "center",
+    color: "#c0392b",
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 40,
+    paddingHorizontal: 24,
   },
   menuCard: {
     flexDirection: "row",

@@ -7,6 +7,9 @@ const corsHeaders = {
 };
 
 const textEncoder = new TextEncoder();
+const SEND_LOCK_MS = 2 * 60 * 1000;
+
+type SmsStatus = "NOT_SENT" | "SENDING" | "SENT" | "FAILED" | "SEND_UNKNOWN";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -46,11 +49,27 @@ function normalizePhone(phone: string) {
 }
 
 function buildMessageText(orderNumber: number) {
-  return `안녕하세요.
-공룡 축제 식품관 브뤼셀입니다
-주문해주신 식사가 준비 되었습니다
-와서 수령 부탁드립니다
-주문 번호 : ${orderNumber}`;
+  return `공룡 축제 식품관 브뤼셀입니다
+음식이 준비되었습니다
+주문번호 : ${orderNumber}`;
+}
+
+function isRecentSmsAttempt(lastSmsAt: string | null) {
+  if (!lastSmsAt) return false;
+  const lastAttemptTime = new Date(lastSmsAt).getTime();
+  if (Number.isNaN(lastAttemptTime)) return false;
+  return Date.now() - lastAttemptTime < SEND_LOCK_MS;
+}
+
+async function updateSmsStatus(
+  supabase: ReturnType<typeof createClient>,
+  orderId: string,
+  smsStatus: SmsStatus,
+) {
+  return supabase
+    .from("orders")
+    .update({ sms_status: smsStatus, last_sms_at: new Date().toISOString() })
+    .eq("id", orderId);
 }
 
 Deno.serve(async (req) => {
@@ -98,7 +117,7 @@ Deno.serve(async (req) => {
 
   const { data: order, error: orderError } = await supabase
     .from("orders")
-    .select("id, order_number, phone_number, status")
+    .select("id, order_number, phone_number, status, sms_status, last_sms_at")
     .eq("id", orderId)
     .single();
 
@@ -118,6 +137,39 @@ Deno.serve(async (req) => {
     });
   }
 
+  if (order.sms_status === "SENT") {
+    return jsonResponse({
+      ok: true,
+      status: "SENT",
+      alreadySent: true,
+      message: "이미 발송 완료된 주문입니다.",
+    });
+  }
+
+  if (order.sms_status === "SENDING" && isRecentSmsAttempt(order.last_sms_at)) {
+    return jsonResponse(
+      {
+        ok: false,
+        status: "SENDING",
+        error: "이미 SMS 발송을 처리 중입니다. 잠시 후 상태를 확인하세요.",
+      },
+      409,
+    );
+  }
+
+  if (order.sms_status === "SENDING" || order.sms_status === "SEND_UNKNOWN") {
+    await updateSmsStatus(supabase, order.id, "SEND_UNKNOWN");
+    return jsonResponse(
+      {
+        ok: false,
+        status: "SEND_UNKNOWN",
+        error:
+          "이전 SMS 요청의 결과를 확인하지 못했습니다. 중복 발송을 막기 위해 재발송하지 않았습니다.",
+      },
+      409,
+    );
+  }
+
   const recipientPhone = normalizePhone(order.phone_number);
   if (!recipientPhone) {
     return jsonResponse({
@@ -126,10 +178,25 @@ Deno.serve(async (req) => {
     });
   }
 
-  await supabase
+  const { data: lockedOrder, error: lockError } = await supabase
     .from("orders")
     .update({ sms_status: "SENDING", last_sms_at: new Date().toISOString() })
-    .eq("id", order.id);
+    .eq("id", order.id)
+    .in("sms_status", ["NOT_SENT", "FAILED"])
+    .select("id")
+    .maybeSingle();
+
+  if (lockError || !lockedOrder) {
+    return jsonResponse(
+      {
+        ok: false,
+        status: "SEND_UNKNOWN",
+        error: "SMS 발송 상태를 잠글 수 없어 전송하지 않았습니다.",
+        detail: lockError?.message,
+      },
+      409,
+    );
+  }
 
   try {
     const date = new Date().toISOString();
@@ -137,9 +204,9 @@ Deno.serve(async (req) => {
     const signature = await hmacSha256Hex(solapiApiSecret, date + salt);
     const authorization = `HMAC-SHA256 apiKey=${solapiApiKey}, date=${date}, salt=${salt}, signature=${signature}`;
 
-    const solapiResponse = await fetch(
-      "https://api.solapi.com/messages/v4/send",
-      {
+    let solapiResponse: Response;
+    try {
+      solapiResponse = await fetch("https://api.solapi.com/messages/v4/send", {
         method: "POST",
         headers: {
           Authorization: authorization,
@@ -152,8 +219,21 @@ Deno.serve(async (req) => {
             text: buildMessageText(order.order_number),
           },
         }),
-      },
-    );
+      });
+    } catch (error) {
+      await updateSmsStatus(supabase, order.id, "SEND_UNKNOWN");
+      return jsonResponse(
+        {
+          ok: false,
+          status: "SEND_UNKNOWN",
+          error:
+            error instanceof Error
+              ? error.message
+              : "SMS 요청 결과를 확인하지 못했습니다.",
+        },
+        502,
+      );
+    }
 
     const responseText = await solapiResponse.text();
     let responseBody: unknown = null;
@@ -164,6 +244,7 @@ Deno.serve(async (req) => {
     }
 
     if (!solapiResponse.ok) {
+      await updateSmsStatus(supabase, order.id, "FAILED");
       throw new Error(
         typeof responseBody === "string"
           ? responseBody
@@ -171,20 +252,32 @@ Deno.serve(async (req) => {
       );
     }
 
-    await supabase
-      .from("orders")
-      .update({ sms_status: "SENT", last_sms_at: new Date().toISOString() })
-      .eq("id", order.id);
+    const { error: sentUpdateError } = await updateSmsStatus(
+      supabase,
+      order.id,
+      "SENT",
+    );
 
-    return jsonResponse({ ok: true, result: responseBody });
+    if (sentUpdateError) {
+      return jsonResponse(
+        {
+          ok: false,
+          status: "SEND_UNKNOWN",
+          error:
+            "SMS 요청은 접수됐지만 발송 상태를 저장하지 못했습니다. 상태 확인이 필요합니다.",
+          detail: sentUpdateError.message,
+        },
+        500,
+      );
+    }
+
+    return jsonResponse({ ok: true, status: "SENT", result: responseBody });
   } catch (error) {
-    await supabase
-      .from("orders")
-      .update({ sms_status: "FAILED", last_sms_at: new Date().toISOString() })
-      .eq("id", order.id);
+    await updateSmsStatus(supabase, order.id, "FAILED");
 
     return jsonResponse({
       ok: false,
+      status: "FAILED",
       error:
         error instanceof Error ? error.message : "SMS 발송에 실패했습니다.",
     });

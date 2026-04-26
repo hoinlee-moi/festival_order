@@ -1,14 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
+import { getCachedJson, setCachedJson } from "../lib/storage";
 import type {
   Order,
   OrderItem,
   OrderStatus,
   PaymentMethod,
   SalesSummary,
+  SmsStatus,
 } from "../types";
 
 const ORDERS_QUERY_KEY = ["orders"];
+
+const buildCacheKey = (parts: Array<string | undefined>) =>
+  `@festival_order/${parts.map((part) => part ?? "all").join("/")}`;
+
+async function getCachedOrThrow<T>(key: string, message: string): Promise<T> {
+  const cached = await getCachedJson<T>(key);
+  if (cached) return cached;
+  throw new Error(message);
+}
 
 export function useOrdersByStatus(
   status: OrderStatus | OrderStatus[],
@@ -19,22 +30,34 @@ export function useOrdersByStatus(
   return useQuery({
     queryKey: [...ORDERS_QUERY_KEY, ...statuses, eventDate ?? "all"],
     queryFn: async (): Promise<Order[]> => {
-      let query = supabase
-        .from("orders")
-        .select("*")
-        .in("status", statuses)
-        .is("closed_at", null);
+      const cacheKey = buildCacheKey(["orders", statuses.join("-"), eventDate]);
 
-      if (eventDate) {
-        query = query.eq("event_date", eventDate);
+      try {
+        let query = supabase
+          .from("orders")
+          .select("*")
+          .in("status", statuses)
+          .is("closed_at", null);
+
+        if (eventDate) {
+          query = query.eq("event_date", eventDate);
+        }
+
+        const { data, error } = await query.order("created_at", {
+          ascending: true,
+        });
+
+        if (error) throw error;
+
+        const orders = data as Order[];
+        await setCachedJson(cacheKey, orders);
+        return orders;
+      } catch {
+        return getCachedOrThrow<Order[]>(
+          cacheKey,
+          "주문 목록을 불러올 수 없습니다. 네트워크 연결을 확인하세요.",
+        );
       }
-
-      const { data, error } = await query.order("created_at", {
-        ascending: true,
-      });
-
-      if (error) throw error;
-      return data as Order[];
     },
     refetchInterval: false,
   });
@@ -51,12 +74,14 @@ export function useCreateOrder() {
       payment_method: PaymentMethod;
     }): Promise<Order> => {
       const today = new Date().toISOString().split("T")[0];
-      const { data: maxData } = await supabase
+      const { data: maxData, error: maxError } = await supabase
         .from("orders")
         .select("order_number")
         .is("closed_at", null)
         .order("order_number", { ascending: false })
         .limit(1);
+
+      if (maxError) throw maxError;
 
       const nextNumber =
         maxData && maxData.length > 0 ? maxData[0].order_number + 1 : 1;
@@ -107,7 +132,7 @@ export function useUpdateSmsStatus() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (params: { id: string; sms_status: "SENDING" }) => {
+    mutationFn: async (params: { id: string; sms_status: SmsStatus }) => {
       const { error } = await supabase
         .from("orders")
         .update({
@@ -130,38 +155,53 @@ export function useSalesSummary(date?: string) {
   return useQuery({
     queryKey: [...ORDERS_QUERY_KEY, "sales", targetDate],
     queryFn: async (): Promise<SalesSummary> => {
-      const start = `${targetDate}T00:00:00.000Z`;
-      const next = new Date(targetDate);
-      next.setDate(next.getDate() + 1);
-      const end = `${next.toISOString().split("T")[0]}T00:00:00.000Z`;
+      const cacheKey = buildCacheKey(["orders", "sales", targetDate]);
 
-      const { data, error } = await supabase
-        .from("orders")
-        .select("total_price, payment_method")
-        .gte("created_at", start)
-        .lt("created_at", end)
-        .eq("status", "COMPLETED");
+      try {
+        const start = `${targetDate}T00:00:00.000Z`;
+        const next = new Date(targetDate);
+        next.setDate(next.getDate() + 1);
+        const end = `${next.toISOString().split("T")[0]}T00:00:00.000Z`;
 
-      if (error) throw error;
+        const { data, error } = await supabase
+          .from("orders")
+          .select("total_price, payment_method")
+          .gte("created_at", start)
+          .lt("created_at", end)
+          .eq("status", "COMPLETED");
 
-      const orders = data ?? [];
-      const cashOrders = orders.filter(
-        (order) => order.payment_method === "CASH",
-      );
-      const cardOrders = orders.filter(
-        (order) => order.payment_method === "CARD",
-      );
-      const sumRevenue = (targetOrders: typeof orders) =>
-        targetOrders.reduce((sum, order) => sum + (order.total_price ?? 0), 0);
+        if (error) throw error;
 
-      return {
-        totalRevenue: sumRevenue(orders),
-        totalOrders: orders.length,
-        cashRevenue: sumRevenue(cashOrders),
-        cashOrders: cashOrders.length,
-        cardRevenue: sumRevenue(cardOrders),
-        cardOrders: cardOrders.length,
-      };
+        const orders = data ?? [];
+        const cashOrders = orders.filter(
+          (order) => order.payment_method === "CASH",
+        );
+        const cardOrders = orders.filter(
+          (order) => order.payment_method === "CARD",
+        );
+        const sumRevenue = (targetOrders: typeof orders) =>
+          targetOrders.reduce(
+            (sum, order) => sum + (order.total_price ?? 0),
+            0,
+          );
+
+        const summary = {
+          totalRevenue: sumRevenue(orders),
+          totalOrders: orders.length,
+          cashRevenue: sumRevenue(cashOrders),
+          cashOrders: cashOrders.length,
+          cardRevenue: sumRevenue(cardOrders),
+          cardOrders: cardOrders.length,
+        };
+
+        await setCachedJson(cacheKey, summary);
+        return summary;
+      } catch {
+        return getCachedOrThrow<SalesSummary>(
+          cacheKey,
+          "매출 정보를 불러올 수 없습니다. 네트워크 연결을 확인하세요.",
+        );
+      }
     },
     refetchInterval: false,
   });
@@ -173,21 +213,68 @@ export function useCompletedOrdersByDate(date?: string) {
   return useQuery({
     queryKey: [...ORDERS_QUERY_KEY, "completed-by-date", targetDate],
     queryFn: async (): Promise<Order[]> => {
-      const start = `${targetDate}T00:00:00.000Z`;
-      const next = new Date(targetDate);
-      next.setDate(next.getDate() + 1);
-      const end = `${next.toISOString().split("T")[0]}T00:00:00.000Z`;
+      const cacheKey = buildCacheKey([
+        "orders",
+        "completed-by-date",
+        targetDate,
+      ]);
 
-      const { data, error } = await supabase
-        .from("orders")
-        .select("*")
-        .gte("created_at", start)
-        .lt("created_at", end)
-        .eq("status", "COMPLETED")
-        .order("created_at", { ascending: false });
+      try {
+        const start = `${targetDate}T00:00:00.000Z`;
+        const next = new Date(targetDate);
+        next.setDate(next.getDate() + 1);
+        const end = `${next.toISOString().split("T")[0]}T00:00:00.000Z`;
 
-      if (error) throw error;
-      return data as Order[];
+        const { data, error } = await supabase
+          .from("orders")
+          .select("*")
+          .gte("created_at", start)
+          .lt("created_at", end)
+          .eq("status", "COMPLETED")
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        const orders = data as Order[];
+        await setCachedJson(cacheKey, orders);
+        return orders;
+      } catch {
+        return getCachedOrThrow<Order[]>(
+          cacheKey,
+          "완료 주문을 불러올 수 없습니다. 네트워크 연결을 확인하세요.",
+        );
+      }
+    },
+    refetchInterval: false,
+  });
+}
+
+export function useOrdersByDate(date?: string) {
+  const targetDate = date ?? new Date().toISOString().split("T")[0];
+
+  return useQuery({
+    queryKey: [...ORDERS_QUERY_KEY, "by-date", targetDate],
+    queryFn: async (): Promise<Order[]> => {
+      const cacheKey = buildCacheKey(["orders", "by-date", targetDate]);
+
+      try {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("*")
+          .eq("event_date", targetDate)
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        const orders = data as Order[];
+        await setCachedJson(cacheKey, orders);
+        return orders;
+      } catch {
+        return getCachedOrThrow<Order[]>(
+          cacheKey,
+          "날짜별 주문 목록을 불러올 수 없습니다. 네트워크 연결을 확인하세요.",
+        );
+      }
     },
     refetchInterval: false,
   });
