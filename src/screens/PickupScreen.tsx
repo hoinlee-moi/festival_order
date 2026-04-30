@@ -7,6 +7,7 @@ import {
   FlatList,
   Alert,
   ActivityIndicator,
+  useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useOrdersByStatus, useUpdateOrderStatus } from "../hooks/useOrders";
@@ -24,6 +25,8 @@ function formatPhone(phone: string): string {
 }
 
 export default function PickupScreen({ navigation }: Props) {
+  const { width } = useWindowDimensions();
+  const isTablet = width >= 768;
   const { data: orders = [], isLoading, isError } = useOrdersByStatus("READY");
   const updateStatus = useUpdateOrderStatus();
   useRealtimeOrders("READY");
@@ -165,40 +168,65 @@ export default function PickupScreen({ navigation }: Props) {
   };
 
   const renderOrderCard = ({ item }: { item: Order }) => (
-    <View style={styles.orderCard}>
+    <View style={[styles.orderCard, isTablet && styles.orderCardTablet]}>
       {/* 상단: 대기번호 + 전화번호 */}
-      <View style={styles.cardHeader}>
-        <Text style={styles.orderNumber}>#{item.order_number}</Text>
-        <Text style={styles.phone}>{formatPhone(item.phone_number)}</Text>
+      <View style={[styles.cardHeader, isTablet && styles.cardHeaderTablet]}>
+        <Text
+          style={[styles.orderNumber, isTablet && styles.orderNumberTablet]}
+        >
+          #{item.order_number}
+        </Text>
+        <Text style={[styles.phone, isTablet && styles.phoneTablet]}>
+          {formatPhone(item.phone_number)}
+        </Text>
       </View>
 
       {/* 메뉴 목록 */}
       <View style={styles.itemsList}>
         {item.items.map((menuItem, idx) => (
-          <Text key={idx} style={styles.menuItemText}>
+          <Text
+            key={idx}
+            style={[styles.menuItemText, isTablet && styles.menuItemTextTablet]}
+          >
             {menuItem.menuName} × {menuItem.quantity}
           </Text>
         ))}
       </View>
 
-      <Text style={styles.smsStatusText}>{getSmsStatusText(item)}</Text>
+      <Text
+        style={[styles.smsStatusText, isTablet && styles.smsStatusTextTablet]}
+      >
+        {getSmsStatusText(item)}
+      </Text>
 
       {/* 버튼 영역 */}
-      <View style={styles.cardActions}>
+      <View style={[styles.cardActions, isTablet && styles.cardActionsTablet]}>
         <TouchableOpacity
-          style={[styles.smsBtn, getSmsButtonStyle(item)]}
+          style={[
+            styles.smsBtn,
+            isTablet && styles.actionBtnTablet,
+            getSmsButtonStyle(item),
+          ]}
           activeOpacity={0.7}
           onPress={() => handleSendSms(item)}
           disabled={isSmsButtonDisabled(item)}
         >
-          <Text style={styles.smsBtnText}>{getSmsButtonText(item)}</Text>
+          <Text
+            style={[styles.smsBtnText, isTablet && styles.smsBtnTextTablet]}
+          >
+            {getSmsButtonText(item)}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={styles.doneBtn}
+          style={[styles.doneBtn, isTablet && styles.actionBtnTablet]}
           activeOpacity={0.7}
           onPress={() => handleComplete(item)}
         >
-          <Text style={styles.doneBtnText}>최종 완료</Text>
+          <Text
+            style={[styles.doneBtnText, isTablet && styles.doneBtnTextTablet]}
+          >
+            최종 완료
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -207,17 +235,25 @@ export default function PickupScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* 헤더 */}
-      <View style={styles.header}>
+      <View style={[styles.header, isTablet && styles.headerTablet]}>
         <TouchableOpacity
           onPress={() =>
             navigation.reset({ index: 0, routes: [{ name: "RoleSelect" }] })
           }
         >
-          <Text style={styles.backBtn}>← 처음으로</Text>
+          <Text style={[styles.backBtn, isTablet && styles.backBtnTablet]}>
+            ← 처음으로
+          </Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>📦 배출구</Text>
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>{orders.length}건 준비됨</Text>
+        <Text
+          style={[styles.headerTitle, isTablet && styles.headerTitleTablet]}
+        >
+          📦 배출구
+        </Text>
+        <View style={[styles.badge, isTablet && styles.badgeTablet]}>
+          <Text style={[styles.badgeText, isTablet && styles.badgeTextTablet]}>
+            {orders.length}건 준비됨
+          </Text>
         </View>
       </View>
 
@@ -225,20 +261,26 @@ export default function PickupScreen({ navigation }: Props) {
         <ActivityIndicator size="large" style={{ marginTop: 60 }} />
       ) : isError ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>
+          <Text style={[styles.emptyText, isTablet && styles.emptyTextTablet]}>
             주문 목록을 불러오지 못했습니다. 네트워크 연결을 확인하세요.
           </Text>
         </View>
       ) : orders.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyEmoji}>☕</Text>
-          <Text style={styles.emptyText}>준비된 주문이 없습니다</Text>
+          <Text
+            style={[styles.emptyEmoji, isTablet && styles.emptyEmojiTablet]}
+          >
+            ☕
+          </Text>
+          <Text style={[styles.emptyText, isTablet && styles.emptyTextTablet]}>
+            준비된 주문이 없습니다
+          </Text>
         </View>
       ) : (
         <FlatList
           data={orders}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, isTablet && styles.listTablet]}
           renderItem={renderOrderCard}
         />
       )}
@@ -257,86 +299,107 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     backgroundColor: "#1a1a2e",
   },
+  headerTablet: { paddingHorizontal: 20, paddingVertical: 14 },
   backBtn: { fontSize: 15, color: "#ddd", fontWeight: "800", marginRight: 12 },
-  headerTitle: { fontSize: 28, fontWeight: "900", color: "#fff", flex: 1 },
+  backBtnTablet: { fontSize: 15 },
+  headerTitle: { fontSize: 22, fontWeight: "900", color: "#fff", flex: 1 },
+  headerTitleTablet: { fontSize: 28 },
   badge: {
     backgroundColor: "#3498db",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 18,
+  },
+  badgeTablet: {
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 20,
   },
-  badgeText: { color: "#fff", fontWeight: "900", fontSize: 17 },
+  badgeText: { color: "#fff", fontWeight: "900", fontSize: 13 },
+  badgeTextTablet: { fontSize: 17 },
   // 빈 상태
   emptyContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
-  emptyEmoji: { fontSize: 60, marginBottom: 12 },
-  emptyText: { fontSize: 22, color: "#888", fontWeight: "800" },
+  emptyEmoji: { fontSize: 46, marginBottom: 10 },
+  emptyEmojiTablet: { fontSize: 60, marginBottom: 12 },
+  emptyText: { fontSize: 17, color: "#888", fontWeight: "800" },
+  emptyTextTablet: { fontSize: 22 },
   // 리스트
   list: {
     width: "100%",
-    maxWidth: 760,
     alignSelf: "center",
-    padding: 14,
+    padding: 10,
     paddingBottom: 40,
   },
+  listTablet: { maxWidth: 760, padding: 14 },
   orderCard: {
     backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 20,
-    marginBottom: 14,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
     shadowRadius: 6,
     elevation: 3,
   },
+  orderCardTablet: { borderRadius: 14, padding: 20, marginBottom: 14 },
   // 카드 헤더
   cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 14,
+    marginBottom: 10,
   },
-  orderNumber: { fontSize: 44, fontWeight: "900", color: "#1a1a2e" },
-  phone: { fontSize: 30, color: "#555", fontWeight: "800" },
+  cardHeaderTablet: { marginBottom: 14 },
+  orderNumber: { fontSize: 30, fontWeight: "900", color: "#1a1a2e" },
+  orderNumberTablet: { fontSize: 44 },
+  phone: { fontSize: 18, color: "#555", fontWeight: "800" },
+  phoneTablet: { fontSize: 30 },
   // 메뉴 아이템
   itemsList: {
-    marginBottom: 16,
-    paddingBottom: 12,
+    marginBottom: 12,
+    paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: "#f0f0f0",
   },
   menuItemText: {
-    fontSize: 36,
+    fontSize: 22,
     color: "#222",
-    marginBottom: 8,
+    marginBottom: 6,
     fontWeight: "900",
   },
+  menuItemTextTablet: { fontSize: 36, marginBottom: 8 },
   // 버튼 영역
-  cardActions: { flexDirection: "row", gap: 10 },
+  cardActions: { flexDirection: "row", gap: 8 },
+  cardActionsTablet: { gap: 10 },
   smsBtn: {
     flex: 1,
-    paddingVertical: 17,
+    paddingVertical: 12,
     borderRadius: 10,
     alignItems: "center",
   },
+  actionBtnTablet: { paddingVertical: 17 },
   smsDefault: { backgroundColor: "#3498db" },
   smsSending: { backgroundColor: "#95a5a6", opacity: 0.7 },
   smsSent: { backgroundColor: "#27ae60" },
   smsUnknown: { backgroundColor: "#f39c12" },
   smsFailed: { backgroundColor: "#e74c3c" },
-  smsBtnText: { fontSize: 30, fontWeight: "900", color: "#fff" },
+  smsBtnText: { fontSize: 16, fontWeight: "900", color: "#fff" },
+  smsBtnTextTablet: { fontSize: 30 },
   smsStatusText: {
     color: "#555",
-    fontSize: 36,
+    fontSize: 17,
     fontWeight: "800",
-    marginBottom: 14,
+    marginBottom: 12,
   },
+  smsStatusTextTablet: { fontSize: 36, marginBottom: 14 },
   doneBtn: {
     flex: 1,
-    paddingVertical: 17,
+    paddingVertical: 12,
     borderRadius: 10,
     backgroundColor: "#1a1a2e",
     alignItems: "center",
   },
-  doneBtnText: { fontSize: 30, fontWeight: "900", color: "#fff" },
+  doneBtnText: { fontSize: 16, fontWeight: "900", color: "#fff" },
+  doneBtnTextTablet: { fontSize: 30 },
 });
