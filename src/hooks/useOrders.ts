@@ -72,6 +72,7 @@ export function useCreateOrder() {
       items: OrderItem[];
       total_price: number;
       payment_method: PaymentMethod;
+      status?: OrderStatus;
     }): Promise<Order> => {
       const today = new Date().toISOString().split("T")[0];
       const { data: maxData, error: maxError } = await supabase
@@ -95,7 +96,7 @@ export function useCreateOrder() {
           items: params.items,
           total_price: params.total_price,
           payment_method: params.payment_method,
-          status: "PENDING",
+          status: params.status ?? "PENDING",
           sms_status: "NOT_SENT",
         })
         .select()
@@ -118,6 +119,24 @@ export function useUpdateOrderStatus() {
       const { error } = await supabase
         .from("orders")
         .update({ status: params.status })
+        .eq("id", params.id);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ORDERS_QUERY_KEY });
+    },
+  });
+}
+
+export function useUpdateOrderPhone() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (params: { id: string; phone_number: string }) => {
+      const { error } = await supabase
+        .from("orders")
+        .update({ phone_number: params.phone_number })
         .eq("id", params.id);
 
       if (error) throw error;

@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   FlatList,
   Alert,
-  useWindowDimensions,
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -25,9 +24,6 @@ function formatPhone(phone: string): string {
 }
 
 export default function PickupScreen({ navigation }: Props) {
-  const { width } = useWindowDimensions();
-  const isWide = width >= 768;
-
   const { data: orders = [], isLoading, isError } = useOrdersByStatus("READY");
   const updateStatus = useUpdateOrderStatus();
   useRealtimeOrders("READY");
@@ -169,7 +165,7 @@ export default function PickupScreen({ navigation }: Props) {
   };
 
   const renderOrderCard = ({ item }: { item: Order }) => (
-    <View style={[styles.orderCard, isWide && styles.orderCardWide]}>
+    <View style={styles.orderCard}>
       {/* 상단: 대기번호 + 전화번호 */}
       <View style={styles.cardHeader}>
         <Text style={styles.orderNumber}>#{item.order_number}</Text>
@@ -212,7 +208,11 @@ export default function PickupScreen({ navigation }: Props) {
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* 헤더 */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.navigate("RoleSelect")}>
+        <TouchableOpacity
+          onPress={() =>
+            navigation.reset({ index: 0, routes: [{ name: "RoleSelect" }] })
+          }
+        >
           <Text style={styles.backBtn}>← 처음으로</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>📦 배출구</Text>
@@ -238,8 +238,6 @@ export default function PickupScreen({ navigation }: Props) {
         <FlatList
           data={orders}
           keyExtractor={(item) => item.id}
-          numColumns={isWide ? 2 : 1}
-          key={isWide ? "wide" : "narrow"}
           contentContainerStyle={styles.list}
           renderItem={renderOrderCard}
         />
@@ -259,33 +257,38 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     backgroundColor: "#1a1a2e",
   },
-  backBtn: { fontSize: 14, color: "#aaa", fontWeight: "600", marginRight: 12 },
-  headerTitle: { fontSize: 24, fontWeight: "800", color: "#fff", flex: 1 },
+  backBtn: { fontSize: 15, color: "#ddd", fontWeight: "800", marginRight: 12 },
+  headerTitle: { fontSize: 28, fontWeight: "900", color: "#fff", flex: 1 },
   badge: {
     backgroundColor: "#3498db",
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 20,
   },
-  badgeText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  badgeText: { color: "#fff", fontWeight: "900", fontSize: 17 },
   // 빈 상태
   emptyContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   emptyEmoji: { fontSize: 60, marginBottom: 12 },
-  emptyText: { fontSize: 20, color: "#aaa", fontWeight: "600" },
+  emptyText: { fontSize: 22, color: "#888", fontWeight: "800" },
   // 리스트
-  list: { padding: 12, paddingBottom: 40 },
+  list: {
+    width: "100%",
+    maxWidth: 760,
+    alignSelf: "center",
+    padding: 14,
+    paddingBottom: 40,
+  },
   orderCard: {
     backgroundColor: "#fff",
-    borderRadius: 16,
+    borderRadius: 14,
     padding: 20,
-    marginBottom: 12,
+    marginBottom: 14,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
     shadowRadius: 6,
     elevation: 3,
   },
-  orderCardWide: { flex: 1, marginHorizontal: 6 },
   // 카드 헤더
   cardHeader: {
     flexDirection: "row",
@@ -293,8 +296,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 14,
   },
-  orderNumber: { fontSize: 28, fontWeight: "900", color: "#1a1a2e" },
-  phone: { fontSize: 15, color: "#888", fontWeight: "500" },
+  orderNumber: { fontSize: 44, fontWeight: "900", color: "#1a1a2e" },
+  phone: { fontSize: 30, color: "#555", fontWeight: "800" },
   // 메뉴 아이템
   itemsList: {
     marginBottom: 16,
@@ -303,16 +306,16 @@ const styles = StyleSheet.create({
     borderBottomColor: "#f0f0f0",
   },
   menuItemText: {
-    fontSize: 16,
-    color: "#444",
-    marginBottom: 4,
-    fontWeight: "500",
+    fontSize: 36,
+    color: "#222",
+    marginBottom: 8,
+    fontWeight: "900",
   },
   // 버튼 영역
   cardActions: { flexDirection: "row", gap: 10 },
   smsBtn: {
     flex: 1,
-    paddingVertical: 14,
+    paddingVertical: 17,
     borderRadius: 10,
     alignItems: "center",
   },
@@ -321,19 +324,19 @@ const styles = StyleSheet.create({
   smsSent: { backgroundColor: "#27ae60" },
   smsUnknown: { backgroundColor: "#f39c12" },
   smsFailed: { backgroundColor: "#e74c3c" },
-  smsBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  smsBtnText: { fontSize: 30, fontWeight: "900", color: "#fff" },
   smsStatusText: {
-    color: "#666",
-    fontSize: 13,
-    fontWeight: "700",
-    marginBottom: 12,
+    color: "#555",
+    fontSize: 36,
+    fontWeight: "800",
+    marginBottom: 14,
   },
   doneBtn: {
     flex: 1,
-    paddingVertical: 14,
+    paddingVertical: 17,
     borderRadius: 10,
     backgroundColor: "#1a1a2e",
     alignItems: "center",
   },
-  doneBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  doneBtnText: { fontSize: 30, fontWeight: "900", color: "#fff" },
 });

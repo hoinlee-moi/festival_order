@@ -18,8 +18,8 @@ import {
   useCreateOrder,
   useOrdersByDate,
   useOrdersByStatus,
+  useUpdateOrderPhone,
   useUpdateOrderStatus,
-  useSalesSummary,
 } from "../hooks/useOrders";
 import { useRealtimeOrders } from "../hooks/useRealtimeOrders";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -34,7 +34,7 @@ import type {
 type Props = NativeStackScreenProps<RootStackParamList, "Counter">;
 
 // ===== 탭 종류 =====
-type Tab = "order" | "recent" | "sales";
+type Tab = "order" | "recent";
 
 const getTodayString = () => new Date().toISOString().split("T")[0];
 
@@ -52,9 +52,18 @@ const shiftDate = (dateString: string, days: number) => {
   return date.toISOString().split("T")[0];
 };
 
+const WAITING_PHONE = "00000000000";
+
+const formatPhone = (value: string) => {
+  const digits = value.replace(/\D/g, "");
+  if (digits.length !== 11) return value || "전화번호 없음";
+  return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+};
+
 export default function CounterScreen({ navigation }: Props) {
   const { width, height } = useWindowDimensions();
   const isWide = width >= 768;
+  const isTabletPortrait = isWide && height > width;
 
   // 데이터
   const {
@@ -63,14 +72,14 @@ export default function CounterScreen({ navigation }: Props) {
     isError: menusError,
   } = useMenus();
   const refreshMenus = useRefreshMenus();
-  const { data: pendingOrders = [], isError: pendingOrdersError } =
-    useOrdersByStatus("PENDING");
+  const { data: sessionOrders = [], isError: sessionOrdersError } =
+    useOrdersByStatus(["PENDING", "READY", "COMPLETED", "CANCELLED"]);
   const [recentDate, setRecentDate] = useState(getTodayString());
   const { data: recentOrders = [], isError: recentOrdersError } =
     useOrdersByDate(recentDate);
-  const { data: salesSummary, isError: salesError } = useSalesSummary();
   const createOrder = useCreateOrder();
   const updateStatus = useUpdateOrderStatus();
+  const updatePhone = useUpdateOrderPhone();
 
   useRealtimeOrders(["PENDING", "READY", "COMPLETED"]);
 
@@ -81,6 +90,8 @@ export default function CounterScreen({ navigation }: Props) {
   const [phone, setPhone] = useState("");
   const [receivedCash, setReceivedCash] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [phoneEditOrder, setPhoneEditOrder] = useState<Order | null>(null);
+  const [editingPhone, setEditingPhone] = useState("");
 
   // ===== 장바구니 로직 =====
   const totalPrice = useMemo(
@@ -122,28 +133,71 @@ export default function CounterScreen({ navigation }: Props) {
 
   // ===== 주문 접수 =====
   const nextOrderNumber = useMemo(() => {
-    if (pendingOrders.length === 0) return 1;
-    const allOrders = pendingOrders;
-    const max = Math.max(...allOrders.map((o) => o.order_number));
+    if (sessionOrders.length === 0) return 1;
+    const max = Math.max(...sessionOrders.map((o) => o.order_number));
     return max + 1;
-  }, [pendingOrders]);
+  }, [sessionOrders]);
 
   const handleOpenCheckout = () => {
     if (cart.length === 0) {
       Alert.alert("알림", "메뉴를 선택해주세요.");
       return;
     }
-    setPhone("");
+    setPhone("010");
     setReceivedCash("");
     setPaymentMethod("CASH");
     setShowModal(true);
   };
 
-  const validatePhone = (num: string) => /^010\d{8}$/.test(num);
+  const validatePhone = (num: string) => {
+    const digits = num.replace(/\D/g, "");
+    return /^010\d{8}$/.test(digits) || digits === WAITING_PHONE;
+  };
 
-  const handleSubmitOrder = async () => {
-    if (!validatePhone(phone)) {
-      Alert.alert("오류", "올바른 전화번호를 입력하세요. (010XXXXXXXX)");
+  const normalizePhone = (num: string) => num.replace(/\D/g, "");
+
+  const openPhoneEditor = (order: Order) => {
+    setPhoneEditOrder(order);
+    setEditingPhone(order.phone_number || "010");
+  };
+
+  const closePhoneEditor = () => {
+    setPhoneEditOrder(null);
+    setEditingPhone("");
+  };
+
+  const handleUpdatePhone = async () => {
+    if (!phoneEditOrder) return;
+
+    const nextPhone = normalizePhone(editingPhone);
+    if (!validatePhone(nextPhone)) {
+      Alert.alert("오류", "010XXXXXXXX 또는 00000000000 형식으로 입력하세요.");
+      return;
+    }
+
+    try {
+      await updatePhone.mutateAsync({
+        id: phoneEditOrder.id,
+        phone_number: nextPhone,
+      });
+      closePhoneEditor();
+      Alert.alert("완료", "전화번호가 수정되었습니다.");
+    } catch {
+      Alert.alert("오류", "전화번호 수정에 실패했습니다.");
+    }
+  };
+
+  const handleSubmitOrder = async (options?: {
+    status?: Order["status"];
+    requirePhone?: boolean;
+  }) => {
+    const status = options?.status ?? "PENDING";
+    const requirePhone = options?.requirePhone ?? true;
+
+    const normalizedPhone = normalizePhone(phone);
+
+    if (requirePhone && !validatePhone(normalizedPhone)) {
+      Alert.alert("오류", "010XXXXXXXX 또는 00000000000 형식으로 입력하세요.");
       return;
     }
     if (paymentMethod === "CASH") {
@@ -155,7 +209,7 @@ export default function CounterScreen({ navigation }: Props) {
     }
     try {
       await createOrder.mutateAsync({
-        phone_number: phone,
+        phone_number: requirePhone ? normalizedPhone : "",
         items: cart.map((c) => ({
           menuName: c.menuName,
           quantity: c.quantity,
@@ -163,13 +217,34 @@ export default function CounterScreen({ navigation }: Props) {
         })),
         total_price: totalPrice,
         payment_method: paymentMethod,
+        status,
       });
       clearCart();
       setShowModal(false);
-      Alert.alert("완료", "주문이 접수되었습니다!");
+      Alert.alert(
+        "완료",
+        status === "COMPLETED"
+          ? "주문이 즉시 완료 처리되었습니다!"
+          : "주문이 접수되었습니다!",
+      );
     } catch {
       Alert.alert("오류", "주문 접수에 실패했습니다. 다시 시도해주세요.");
     }
+  };
+
+  const handleImmediateComplete = () => {
+    Alert.alert(
+      "즉시 완료",
+      "이 주문을 주방으로 넘기지 않고 즉시 완료 처리할까요?",
+      [
+        { text: "아니요", style: "cancel" },
+        {
+          text: "즉시 완료",
+          onPress: () =>
+            handleSubmitOrder({ status: "COMPLETED", requirePhone: false }),
+        },
+      ],
+    );
   };
 
   const handleCancelOrder = (order: Order) => {
@@ -209,9 +284,18 @@ export default function CounterScreen({ navigation }: Props) {
   const renderMenuGrid = () => (
     <View style={styles.menuSection}>
       <View style={styles.menuHeader}>
-        <Text style={styles.sectionTitle}>메뉴</Text>
-        <TouchableOpacity style={styles.refreshBtn} onPress={refreshMenus}>
-          <Text style={styles.refreshBtnText}>🔄 새로고침</Text>
+        <Text style={[styles.sectionTitle, isWide && styles.sectionTitleWide]}>
+          메뉴
+        </Text>
+        <TouchableOpacity
+          style={[styles.refreshBtn, isWide && styles.refreshBtnWide]}
+          onPress={refreshMenus}
+        >
+          <Text
+            style={[styles.refreshBtnText, isWide && styles.refreshBtnTextWide]}
+          >
+            🔄 새로고침
+          </Text>
         </TouchableOpacity>
       </View>
       {menusError && (
@@ -222,18 +306,22 @@ export default function CounterScreen({ navigation }: Props) {
       {menusLoading ? (
         <ActivityIndicator size="large" style={{ marginTop: 40 }} />
       ) : (
-        <View
-          style={[styles.menuList, { flexDirection: "row", flexWrap: "wrap" }]}
-        >
+        <View style={styles.menuList}>
           {menus.map((item) => (
             <TouchableOpacity
               key={item.id}
-              style={[styles.menuCard, { width: isWide ? "33%" : "48%" }]}
+              style={[
+                styles.menuCard,
+                isWide && styles.menuCardWide,
+                { width: isWide ? "48%" : "48%" },
+              ]}
               activeOpacity={0.7}
               onPress={() => addToCart(item)}
             >
-              <Text style={styles.menuName}>{item.name}</Text>
-              <Text style={styles.menuPrice}>
+              <Text style={[styles.menuName, isWide && styles.menuNameWide]}>
+                {item.name}
+              </Text>
+              <Text style={[styles.menuPrice, isWide && styles.menuPriceWide]}>
                 {item.price.toLocaleString()}원
               </Text>
             </TouchableOpacity>
@@ -245,39 +333,111 @@ export default function CounterScreen({ navigation }: Props) {
 
   const renderCart = () => (
     <View style={styles.cartSection}>
-      <Text style={styles.sectionTitle}>주문 내역</Text>
+      <Text style={[styles.sectionTitle, isWide && styles.sectionTitleWide]}>
+        주문 내역
+      </Text>
       {cart.length === 0 ? (
-        <Text style={styles.emptyText}>메뉴를 터치하여 추가하세요</Text>
+        <Text style={[styles.emptyText, isWide && styles.emptyTextWide]}>
+          메뉴를 터치하여 추가하세요
+        </Text>
       ) : (
-        <ScrollView style={styles.cartList}>
-          {cart.map((item) => (
-            <View key={item.menuId} style={styles.cartItem}>
-              <Text style={styles.cartItemName}>{item.menuName}</Text>
-              <View style={styles.cartQtyRow}>
-                <TouchableOpacity
-                  style={styles.qtyBtn}
-                  onPress={() => updateQuantity(item.menuId, -1)}
+        <View
+          style={[
+            styles.cartListFrame,
+            {
+              maxHeight: isWide
+                ? Math.max(260, height * 0.42)
+                : Math.max(160, height * 0.32),
+            },
+          ]}
+        >
+          <ScrollView
+            style={styles.cartList}
+            contentContainerStyle={styles.cartListContent}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator
+          >
+            {cart.map((item) => (
+              <View
+                key={item.menuId}
+                style={[
+                  styles.cartItem,
+                  isWide && styles.cartItemWide,
+                  isTabletPortrait && styles.cartItemStacked,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.cartItemName,
+                    isWide && styles.cartItemNameWide,
+                    isTabletPortrait && styles.cartItemNameStacked,
+                  ]}
                 >
-                  <Text style={styles.qtyBtnText}>−</Text>
-                </TouchableOpacity>
-                <Text style={styles.cartQty}>{item.quantity}</Text>
-                <TouchableOpacity
-                  style={styles.qtyBtn}
-                  onPress={() => updateQuantity(item.menuId, 1)}
+                  {item.menuName}
+                </Text>
+                <View
+                  style={[
+                    styles.cartItemBottom,
+                    isTabletPortrait && styles.cartItemBottomStacked,
+                  ]}
                 >
-                  <Text style={styles.qtyBtnText}>+</Text>
-                </TouchableOpacity>
+                  <View
+                    style={[styles.cartQtyRow, isWide && styles.cartQtyRowWide]}
+                  >
+                    <TouchableOpacity
+                      style={[styles.qtyBtn, isWide && styles.qtyBtnWide]}
+                      onPress={() => updateQuantity(item.menuId, -1)}
+                    >
+                      <Text
+                        style={[
+                          styles.qtyBtnText,
+                          isWide && styles.qtyBtnTextWide,
+                        ]}
+                      >
+                        −
+                      </Text>
+                    </TouchableOpacity>
+                    <Text
+                      style={[styles.cartQty, isWide && styles.cartQtyWide]}
+                    >
+                      {item.quantity}
+                    </Text>
+                    <TouchableOpacity
+                      style={[styles.qtyBtn, isWide && styles.qtyBtnWide]}
+                      onPress={() => updateQuantity(item.menuId, 1)}
+                    >
+                      <Text
+                        style={[
+                          styles.qtyBtnText,
+                          isWide && styles.qtyBtnTextWide,
+                        ]}
+                      >
+                        +
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text
+                    style={[
+                      styles.cartItemPrice,
+                      isWide && styles.cartItemPriceWide,
+                      isTabletPortrait && styles.cartItemPriceStacked,
+                    ]}
+                  >
+                    {(item.price * item.quantity).toLocaleString()}원
+                  </Text>
+                </View>
               </View>
-              <Text style={styles.cartItemPrice}>
-                {(item.price * item.quantity).toLocaleString()}원
-              </Text>
-            </View>
-          ))}
-        </ScrollView>
+            ))}
+          </ScrollView>
+        </View>
       )}
       <View style={styles.cartFooter}>
-        <Text style={styles.totalLabel}>합계</Text>
-        <Text style={styles.totalPrice}>{totalPrice.toLocaleString()}원</Text>
+        <Text style={[styles.totalLabel, isWide && styles.totalLabelWide]}>
+          합계
+        </Text>
+        <Text style={[styles.totalPrice, isWide && styles.totalPriceWide]}>
+          {totalPrice.toLocaleString()}원
+        </Text>
       </View>
       <View style={styles.cartActions}>
         <TouchableOpacity
@@ -285,14 +445,22 @@ export default function CounterScreen({ navigation }: Props) {
           onPress={clearCart}
           disabled={cart.length === 0}
         >
-          <Text style={styles.clearBtnText}>초기화</Text>
+          <Text
+            style={[styles.clearBtnText, isWide && styles.actionBtnTextWide]}
+          >
+            초기화
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.checkoutBtn, cart.length === 0 && styles.btnDisabled]}
           onPress={handleOpenCheckout}
           disabled={cart.length === 0}
         >
-          <Text style={styles.checkoutBtnText}>주문 접수</Text>
+          <Text
+            style={[styles.checkoutBtnText, isWide && styles.actionBtnTextWide]}
+          >
+            주문 접수
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -357,11 +525,22 @@ export default function CounterScreen({ navigation }: Props) {
                     .map((i) => `${i.menuName}×${i.quantity}`)
                     .join(", ")}
                 </Text>
+                <View style={styles.recentPhoneRow}>
+                  <Text style={styles.recentPhone}>
+                    {formatPhone(item.phone_number)}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.phoneEditBtn}
+                    onPress={() => openPhoneEditor(item)}
+                  >
+                    <Text style={styles.phoneEditBtnText}>번호 수정</Text>
+                  </TouchableOpacity>
+                </View>
                 <Text style={styles.recentTotal}>
                   {item.total_price.toLocaleString()}원
                 </Text>
               </View>
-              {item.status === "PENDING" && (
+              {item.status !== "CANCELLED" && (
                 <TouchableOpacity
                   style={styles.cancelBtn}
                   onPress={() => handleCancelOrder(item)}
@@ -376,183 +555,176 @@ export default function CounterScreen({ navigation }: Props) {
     </View>
   );
 
-  const renderSales = () => (
-    <View style={styles.salesSection}>
-      <Text style={styles.sectionTitle}>당일 매출</Text>
-      {salesError && (
-        <Text style={styles.errorText}>
-          매출 정보를 불러오지 못했습니다. 네트워크 연결을 확인하세요.
-        </Text>
-      )}
-      <View style={styles.salesCard}>
-        <View style={styles.salesRow}>
-          <Text style={styles.salesLabel}>총 매출액</Text>
-          <Text style={styles.salesValue}>
-            {(salesSummary?.totalRevenue ?? 0).toLocaleString()}원
-          </Text>
-        </View>
-        <View style={styles.salesDivider} />
-        <View style={styles.salesRow}>
-          <Text style={styles.salesLabel}>총 주문 건수</Text>
-          <Text style={styles.salesValue}>
-            {salesSummary?.totalOrders ?? 0}건
-          </Text>
-        </View>
+  const renderOrderScreen = () =>
+    isWide ? (
+      <View style={styles.wideBody}>
+        <View style={styles.wideLeft}>{renderMenuGrid()}</View>
+        <View style={styles.wideRight}>{renderCart()}</View>
       </View>
-    </View>
-  );
+    ) : (
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 40 }}
+        nestedScrollEnabled
+      >
+        {renderMenuGrid()}
+        {renderCart()}
+      </ScrollView>
+    );
 
-  // ===== 와이드(태블릿): 좌측 메뉴 + 우측 장바구니, 하단 탭으로 최근주문/매출 =====
-  // ===== 좁은(폰): 탭 전환 =====
+  // ===== 카운터: 주문 / 최근 주문 탭 =====
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* 헤더 */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.navigate("RoleSelect")}>
+        <TouchableOpacity
+          onPress={() =>
+            navigation.reset({ index: 0, routes: [{ name: "RoleSelect" }] })
+          }
+        >
           <Text style={styles.backBtn}>← 처음으로</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>🧾 카운터</Text>
         <Text style={styles.headerOrderNum}>
-          {pendingOrdersError
+          {sessionOrdersError
             ? "대기번호 확인 불가"
             : `다음 대기번호: #${nextOrderNumber}`}
         </Text>
       </View>
 
-      {isWide ? (
-        /* === 태블릿 레이아웃 === */
-        <View style={styles.wideBody}>
-          <View style={styles.wideLeft}>{renderMenuGrid()}</View>
-          <View style={styles.wideRight}>
-            {renderCart()}
-            {/* 탭 영역 */}
-            <View style={styles.tabRow}>
-              <TouchableOpacity
-                style={[styles.tab, activeTab === "recent" && styles.tabActive]}
-                onPress={() => setActiveTab("recent")}
-              >
-                <Text
-                  style={[
-                    styles.tabText,
-                    activeTab === "recent" && styles.tabTextActive,
-                  ]}
-                >
-                  최근 주문
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.tab, activeTab === "sales" && styles.tabActive]}
-                onPress={() => setActiveTab("sales")}
-              >
-                <Text
-                  style={[
-                    styles.tabText,
-                    activeTab === "sales" && styles.tabTextActive,
-                  ]}
-                >
-                  매출
-                </Text>
-              </TouchableOpacity>
-            </View>
-            {activeTab === "recent" ? renderRecentOrders() : renderSales()}
-          </View>
+      <View style={{ flex: 1 }}>
+        <View style={styles.tabRow}>
+          <TouchableOpacity
+            style={[
+              styles.tab,
+              isWide && styles.tabWide,
+              activeTab === "order" && styles.tabActive,
+            ]}
+            onPress={() => setActiveTab("order")}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                isWide && styles.tabTextWide,
+                activeTab === "order" && styles.tabTextActive,
+              ]}
+            >
+              주문
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.tab,
+              isWide && styles.tabWide,
+              activeTab === "recent" && styles.tabActive,
+            ]}
+            onPress={() => setActiveTab("recent")}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                isWide && styles.tabTextWide,
+                activeTab === "recent" && styles.tabTextActive,
+              ]}
+            >
+              최근 주문
+            </Text>
+          </TouchableOpacity>
         </View>
-      ) : (
-        /* === 모바일 레이아웃 === */
-        <View style={{ flex: 1 }}>
-          <View style={styles.tabRow}>
-            <TouchableOpacity
-              style={[styles.tab, activeTab === "order" && styles.tabActive]}
-              onPress={() => setActiveTab("order")}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  activeTab === "order" && styles.tabTextActive,
-                ]}
-              >
-                주문
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.tab, activeTab === "recent" && styles.tabActive]}
-              onPress={() => setActiveTab("recent")}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  activeTab === "recent" && styles.tabTextActive,
-                ]}
-              >
-                최근 주문
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.tab, activeTab === "sales" && styles.tabActive]}
-              onPress={() => setActiveTab("sales")}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  activeTab === "sales" && styles.tabTextActive,
-                ]}
-              >
-                매출
-              </Text>
-            </TouchableOpacity>
-          </View>
-          {activeTab === "order" && (
-            <ScrollView
-              style={{ flex: 1 }}
-              contentContainerStyle={{ paddingBottom: 40 }}
-            >
-              {renderMenuGrid()}
-              {renderCart()}
-            </ScrollView>
-          )}
-          {activeTab === "recent" && renderRecentOrders()}
-          {activeTab === "sales" && renderSales()}
-        </View>
-      )}
+        {activeTab === "order" ? renderOrderScreen() : renderRecentOrders()}
+      </View>
 
       {/* ===== 결제 모달 ===== */}
       <Modal visible={showModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { maxHeight: height * 0.9 }]}>
+          <View
+            style={[
+              styles.modalContent,
+              isWide && styles.modalContentWide,
+              { maxHeight: height * 0.9 },
+            ]}
+          >
             <ScrollView
               style={styles.modalBodyScroll}
               contentContainerStyle={styles.modalBodyContent}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              <Text style={styles.modalTitle}>주문 확인</Text>
+              <Text
+                style={[styles.modalTitle, isWide && styles.modalTitleWide]}
+              >
+                주문 확인
+              </Text>
 
               {/* 주문 요약 */}
               <View style={styles.modalSummary}>
                 {cart.map((item) => (
-                  <Text key={item.menuId} style={styles.modalItem}>
+                  <Text
+                    key={item.menuId}
+                    style={[styles.modalItem, isWide && styles.modalItemWide]}
+                  >
                     {item.menuName} × {item.quantity} ={" "}
                     {(item.price * item.quantity).toLocaleString()}원
                   </Text>
                 ))}
-                <Text style={styles.modalTotal}>
+                <Text
+                  style={[styles.modalTotal, isWide && styles.modalTotalWide]}
+                >
                   합계: {totalPrice.toLocaleString()}원
                 </Text>
               </View>
 
               {/* 전화번호 입력 */}
-              <Text style={styles.inputLabel}>전화번호</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="01012345678"
-                keyboardType="phone-pad"
-                maxLength={11}
-                value={phone}
-                onChangeText={setPhone}
-              />
+              <Text
+                style={[styles.inputLabel, isWide && styles.inputLabelWide]}
+              >
+                전화번호
+              </Text>
+              <View style={styles.phoneInputRow}>
+                <TextInput
+                  style={[
+                    styles.input,
+                    styles.phoneInput,
+                    isWide && styles.inputWide,
+                  ]}
+                  placeholder="01012345678"
+                  keyboardType="phone-pad"
+                  maxLength={11}
+                  value={phone}
+                  onChangeText={setPhone}
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.waitingPhoneBtn,
+                    isWide && styles.waitingPhoneBtnWide,
+                  ]}
+                  onPress={() => setPhone(WAITING_PHONE)}
+                >
+                  <Text
+                    style={[
+                      styles.waitingPhoneBtnText,
+                      isWide && styles.waitingPhoneBtnTextWide,
+                    ]}
+                  >
+                    대기
+                  </Text>
+                  <Text
+                    style={[
+                      styles.waitingPhoneSubText,
+                      isWide && styles.waitingPhoneSubTextWide,
+                    ]}
+                  >
+                    000-0000-0000
+                  </Text>
+                </TouchableOpacity>
+              </View>
 
               {/* 결제 수단 선택 */}
-              <Text style={styles.inputLabel}>결제 수단</Text>
+              <Text
+                style={[styles.inputLabel, isWide && styles.inputLabelWide]}
+              >
+                결제 수단
+              </Text>
               <View style={styles.payTabRow}>
                 <TouchableOpacity
                   style={[
@@ -565,6 +737,7 @@ export default function CounterScreen({ navigation }: Props) {
                   <Text
                     style={[
                       styles.payTabIcon,
+                      isWide && styles.payTabIconWide,
                       paymentMethod === "CASH" && styles.payTabTextActive,
                     ]}
                   >
@@ -573,6 +746,7 @@ export default function CounterScreen({ navigation }: Props) {
                   <Text
                     style={[
                       styles.payTabText,
+                      isWide && styles.payTabTextWide,
                       paymentMethod === "CASH" && styles.payTabTextActive,
                     ]}
                   >
@@ -590,6 +764,7 @@ export default function CounterScreen({ navigation }: Props) {
                   <Text
                     style={[
                       styles.payTabIcon,
+                      isWide && styles.payTabIconWide,
                       paymentMethod === "CARD" && styles.payTabTextActive,
                     ]}
                   >
@@ -598,6 +773,7 @@ export default function CounterScreen({ navigation }: Props) {
                   <Text
                     style={[
                       styles.payTabText,
+                      isWide && styles.payTabTextWide,
                       paymentMethod === "CARD" && styles.payTabTextActive,
                     ]}
                   >
@@ -610,9 +786,16 @@ export default function CounterScreen({ navigation }: Props) {
               <View style={styles.cashDetailsSlot}>
                 {paymentMethod === "CASH" ? (
                   <>
-                    <Text style={styles.inputLabel}>받은 금액</Text>
+                    <Text
+                      style={[
+                        styles.inputLabel,
+                        isWide && styles.inputLabelWide,
+                      ]}
+                    >
+                      받은 금액
+                    </Text>
                     <TextInput
-                      style={styles.input}
+                      style={[styles.input, isWide && styles.inputWide]}
                       placeholder="금액 입력"
                       keyboardType="number-pad"
                       value={receivedCash}
@@ -627,7 +810,14 @@ export default function CounterScreen({ navigation }: Props) {
                           )
                         }
                       >
-                        <Text style={styles.cashBtnText}>+1만원</Text>
+                        <Text
+                          style={[
+                            styles.cashBtnText,
+                            isWide && styles.cashBtnTextWide,
+                          ]}
+                        >
+                          +1만원
+                        </Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.cashBtn}
@@ -637,19 +827,34 @@ export default function CounterScreen({ navigation }: Props) {
                           )
                         }
                       >
-                        <Text style={styles.cashBtnText}>5만원</Text>
+                        <Text
+                          style={[
+                            styles.cashBtnText,
+                            isWide && styles.cashBtnTextWide,
+                          ]}
+                        >
+                          5만원
+                        </Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.cashBtn}
                         onPress={() => setReceivedCash(String(totalPrice))}
                       >
-                        <Text style={styles.cashBtnText}>금액 맞음</Text>
+                        <Text
+                          style={[
+                            styles.cashBtnText,
+                            isWide && styles.cashBtnTextWide,
+                          ]}
+                        >
+                          금액 맞음
+                        </Text>
                       </TouchableOpacity>
                     </View>
                     {cashNum > 0 ? (
                       <Text
                         style={[
                           styles.changeText,
+                          isWide && styles.changeTextWide,
                           change < 0 && styles.changeNegative,
                         ]}
                       >
@@ -657,14 +862,25 @@ export default function CounterScreen({ navigation }: Props) {
                         {change >= 0 ? `${change.toLocaleString()}원` : "부족"}
                       </Text>
                     ) : (
-                      <Text style={styles.changeTextPlaceholder}> </Text>
+                      <Text
+                        style={[
+                          styles.changeTextPlaceholder,
+                          isWide && styles.changeTextWide,
+                        ]}
+                      >
+                        {" "}
+                      </Text>
                     )}
                   </>
                 ) : null}
               </View>
 
               {/* 대기번호 */}
-              <Text style={styles.nextNumber}>대기번호 #{nextOrderNumber}</Text>
+              <Text
+                style={[styles.nextNumber, isWide && styles.nextNumberWide]}
+              >
+                대기번호 #{nextOrderNumber}
+              </Text>
             </ScrollView>
 
             {/* 버튼 */}
@@ -673,18 +889,147 @@ export default function CounterScreen({ navigation }: Props) {
                 style={styles.modalCancelBtn}
                 onPress={() => setShowModal(false)}
               >
-                <Text style={styles.modalCancelText}>취소</Text>
+                <Text
+                  style={[
+                    styles.modalCancelText,
+                    isWide && styles.modalButtonTextWide,
+                  ]}
+                >
+                  취소
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
                   styles.modalSubmitBtn,
                   createOrder.isPending && styles.btnDisabled,
                 ]}
-                onPress={handleSubmitOrder}
+                onPress={() =>
+                  handleSubmitOrder({ status: "PENDING", requirePhone: true })
+                }
                 disabled={createOrder.isPending}
               >
-                <Text style={styles.modalSubmitText}>
-                  {createOrder.isPending ? "처리 중..." : "주문 접수"}
+                <Text
+                  style={[
+                    styles.modalSubmitText,
+                    isWide && styles.modalButtonTextWide,
+                  ]}
+                >
+                  {createOrder.isPending ? "처리 중..." : "주방 접수"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalCompleteBtn,
+                  createOrder.isPending && styles.btnDisabled,
+                ]}
+                onPress={handleImmediateComplete}
+                disabled={createOrder.isPending}
+              >
+                <Text
+                  style={[
+                    styles.modalSubmitText,
+                    isWide && styles.modalButtonTextWide,
+                  ]}
+                >
+                  {createOrder.isPending ? "처리 중..." : "즉시 완료"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={Boolean(phoneEditOrder)} animationType="fade" transparent>
+        <View style={styles.modalOverlay}>
+          <View
+            style={[styles.phoneEditModal, isWide && styles.phoneEditModalWide]}
+          >
+            <Text style={[styles.modalTitle, isWide && styles.modalTitleWide]}>
+              전화번호 수정
+            </Text>
+            <Text style={[styles.inputLabel, isWide && styles.inputLabelWide]}>
+              대기번호 #{phoneEditOrder?.order_number}
+            </Text>
+            <View style={styles.phoneInputRow}>
+              <TextInput
+                style={[
+                  styles.input,
+                  styles.phoneInput,
+                  isWide && styles.inputWide,
+                ]}
+                placeholder="01012345678"
+                keyboardType="phone-pad"
+                maxLength={11}
+                value={editingPhone}
+                onChangeText={setEditingPhone}
+              />
+              <TouchableOpacity
+                style={[
+                  styles.waitingPhoneBtn,
+                  isWide && styles.waitingPhoneBtnWide,
+                ]}
+                onPress={() => setEditingPhone(WAITING_PHONE)}
+              >
+                <Text
+                  style={[
+                    styles.waitingPhoneBtnText,
+                    isWide && styles.waitingPhoneBtnTextWide,
+                  ]}
+                >
+                  대기
+                </Text>
+                <Text
+                  style={[
+                    styles.waitingPhoneSubText,
+                    isWide && styles.waitingPhoneSubTextWide,
+                  ]}
+                >
+                  000-0000-0000
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={[styles.clearPhoneBtn, isWide && styles.clearPhoneBtnWide]}
+              onPress={() => setEditingPhone("")}
+            >
+              <Text
+                style={[
+                  styles.clearPhoneBtnText,
+                  isWide && styles.clearPhoneBtnTextWide,
+                ]}
+              >
+                번호 전체 지우기
+              </Text>
+            </TouchableOpacity>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={closePhoneEditor}
+              >
+                <Text
+                  style={[
+                    styles.modalCancelText,
+                    isWide && styles.modalButtonTextWide,
+                  ]}
+                >
+                  취소
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalSubmitBtn,
+                  updatePhone.isPending && styles.btnDisabled,
+                ]}
+                onPress={handleUpdatePhone}
+                disabled={updatePhone.isPending}
+              >
+                <Text
+                  style={[
+                    styles.modalSubmitText,
+                    isWide && styles.modalButtonTextWide,
+                  ]}
+                >
+                  {updatePhone.isPending ? "수정 중..." : "저장"}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -707,13 +1052,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
   },
-  backBtn: { fontSize: 14, color: "#aaa", fontWeight: "600" },
-  headerTitle: { fontSize: 22, fontWeight: "800", color: "#fff" },
-  headerOrderNum: { fontSize: 16, fontWeight: "600", color: "#ffd460" },
+  backBtn: { fontSize: 15, color: "#ddd", fontWeight: "800" },
+  headerTitle: { fontSize: 24, fontWeight: "900", color: "#fff" },
+  headerOrderNum: { fontSize: 17, fontWeight: "800", color: "#ffd460" },
   // 태블릿 레이아웃
   wideBody: { flex: 1, flexDirection: "row" },
   wideLeft: { flex: 3, borderRightWidth: 1, borderRightColor: "#e0e0e0" },
   wideRight: { flex: 2 },
+  tabletBody: { flex: 1 },
+  tabletOrderScroll: { flex: 1 },
+  tabletOrderContent: { paddingBottom: 8 },
+  tabletBottomPanel: {
+    flex: 1,
+    borderTopWidth: 1,
+    borderTopColor: "#e0e0e0",
+    backgroundColor: "#f5f5f5",
+  },
   // 탭
   tabRow: {
     flexDirection: "row",
@@ -721,9 +1075,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#e0e0e0",
   },
-  tab: { flex: 1, paddingVertical: 12, alignItems: "center" },
+  tab: { flex: 1, paddingVertical: 13, alignItems: "center" },
+  tabWide: { paddingVertical: 24 },
   tabActive: { borderBottomWidth: 3, borderBottomColor: "#1a1a2e" },
-  tabText: { fontSize: 15, color: "#999", fontWeight: "600" },
+  tabText: { fontSize: 17, color: "#888", fontWeight: "800" },
+  tabTextWide: { fontSize: 42, fontWeight: "900" },
   tabTextActive: { color: "#1a1a2e" },
   // 메뉴 섹션
   menuSection: { flex: 1, padding: 12 },
@@ -733,15 +1089,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
-  sectionTitle: { fontSize: 18, fontWeight: "700", color: "#333" },
+  sectionTitle: { fontSize: 21, fontWeight: "900", color: "#222" },
+  sectionTitleWide: { fontSize: 38 },
   refreshBtn: {
     backgroundColor: "#e8e8e8",
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
   },
-  refreshBtnText: { fontSize: 13, color: "#555" },
-  menuList: { paddingBottom: 8, gap: 8, justifyContent: "space-between" },
+  refreshBtnWide: {
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  refreshBtnText: { fontSize: 14, color: "#444", fontWeight: "800" },
+  refreshBtnTextWide: { fontSize: 22, fontWeight: "900" },
+  menuList: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-start",
+    gap: 8,
+    paddingBottom: 8,
+  },
   menuCard: {
     backgroundColor: "#fff",
     padding: 16,
@@ -753,23 +1122,39 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  menuName: { fontSize: 17, fontWeight: "700", color: "#333", marginBottom: 4 },
-  menuPrice: { fontSize: 15, fontWeight: "600", color: "#e74c3c" },
+  menuCardWide: {
+    minHeight: 180,
+    paddingVertical: 32,
+    paddingHorizontal: 18,
+    borderRadius: 18,
+    justifyContent: "center",
+  },
+  menuName: { fontSize: 19, fontWeight: "900", color: "#222", marginBottom: 6 },
+  menuNameWide: { fontSize: 34, marginBottom: 14 },
+  menuPrice: { fontSize: 17, fontWeight: "800", color: "#e74c3c" },
+  menuPriceWide: { fontSize: 28, fontWeight: "900" },
   // 장바구니
   cartSection: { padding: 12 },
   emptyText: {
     color: "#aaa",
     textAlign: "center",
     marginTop: 20,
-    fontSize: 14,
+    fontSize: 16,
+    fontWeight: "700",
   },
+  emptyTextWide: { fontSize: 28, fontWeight: "900", marginTop: 34 },
   errorText: {
     color: "#c0392b",
     fontSize: 13,
     fontWeight: "700",
     marginBottom: 8,
   },
-  cartList: { maxHeight: 180 },
+  cartListFrame: {
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  cartList: { flexGrow: 0 },
+  cartListContent: { paddingBottom: 2 },
   cartItem: {
     flexDirection: "row",
     alignItems: "center",
@@ -779,8 +1164,30 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 6,
   },
-  cartItemName: { flex: 1, fontSize: 15, fontWeight: "600", color: "#333" },
+  cartItemWide: { padding: 18, borderRadius: 14, marginBottom: 12 },
+  cartItemStacked: {
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
+  cartItemName: { flex: 1, fontSize: 17, fontWeight: "900", color: "#222" },
+  cartItemNameWide: { fontSize: 28 },
+  cartItemNameStacked: {
+    flex: 0,
+    marginBottom: 14,
+    lineHeight: 34,
+  },
+  cartItemBottom: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 14,
+  },
+  cartItemBottomStacked: {
+    justifyContent: "space-between",
+    width: "100%",
+  },
   cartQtyRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  cartQtyRowWide: { gap: 14 },
   qtyBtn: {
     width: 32,
     height: 32,
@@ -789,20 +1196,25 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  qtyBtnText: { fontSize: 18, fontWeight: "700", color: "#333" },
+  qtyBtnWide: { width: 52, height: 52, borderRadius: 26 },
+  qtyBtnText: { fontSize: 20, fontWeight: "900", color: "#222" },
+  qtyBtnTextWide: { fontSize: 34 },
   cartQty: {
-    fontSize: 16,
-    fontWeight: "700",
+    fontSize: 18,
+    fontWeight: "900",
     minWidth: 24,
     textAlign: "center",
   },
+  cartQtyWide: { fontSize: 30, minWidth: 44 },
   cartItemPrice: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#555",
-    minWidth: 70,
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#444",
+    minWidth: 82,
     textAlign: "right",
   },
+  cartItemPriceWide: { fontSize: 26, minWidth: 132 },
+  cartItemPriceStacked: { textAlign: "right", minWidth: 150 },
   cartFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -812,8 +1224,10 @@ const styles = StyleSheet.create({
     borderTopColor: "#e0e0e0",
     marginTop: 8,
   },
-  totalLabel: { fontSize: 18, fontWeight: "700", color: "#333" },
-  totalPrice: { fontSize: 22, fontWeight: "800", color: "#e74c3c" },
+  totalLabel: { fontSize: 20, fontWeight: "900", color: "#222" },
+  totalLabelWide: { fontSize: 34 },
+  totalPrice: { fontSize: 25, fontWeight: "900", color: "#e74c3c" },
+  totalPriceWide: { fontSize: 40 },
   cartActions: { flexDirection: "row", gap: 10, marginTop: 12 },
   clearBtn: {
     flex: 1,
@@ -822,7 +1236,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#e0e0e0",
     alignItems: "center",
   },
-  clearBtnText: { fontSize: 16, fontWeight: "700", color: "#555" },
+  clearBtnText: { fontSize: 17, fontWeight: "900", color: "#555" },
   checkoutBtn: {
     flex: 2,
     paddingVertical: 14,
@@ -830,7 +1244,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#1a1a2e",
     alignItems: "center",
   },
-  checkoutBtnText: { fontSize: 16, fontWeight: "700", color: "#fff" },
+  checkoutBtnText: { fontSize: 18, fontWeight: "900", color: "#fff" },
+  actionBtnTextWide: { fontSize: 30, fontWeight: "900" },
   btnDisabled: { opacity: 0.5 },
   // 최근 주문
   recentSection: { flex: 1, paddingHorizontal: 12, paddingTop: 12 },
@@ -846,7 +1261,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 8,
   },
-  todaySmallBtnText: { fontSize: 13, color: "#555", fontWeight: "700" },
+  todaySmallBtnText: { fontSize: 14, color: "#444", fontWeight: "900" },
   dateSelectorRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -862,8 +1277,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
   },
-  dateMoveBtnText: { fontSize: 13, color: "#555", fontWeight: "700" },
-  dateSelectorText: { fontSize: 16, color: "#1a1a2e", fontWeight: "800" },
+  dateMoveBtnText: { fontSize: 15, color: "#444", fontWeight: "900" },
+  dateSelectorText: { fontSize: 18, color: "#1a1a2e", fontWeight: "900" },
   recentList: { paddingBottom: 40 },
   recentCard: {
     flexDirection: "row",
@@ -885,24 +1300,38 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 2,
   },
-  recentNumber: { fontSize: 20, fontWeight: "800", color: "#1a1a2e" },
+  recentNumber: { fontSize: 23, fontWeight: "900", color: "#1a1a2e" },
   statusBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
     overflow: "hidden",
-    fontSize: 11,
-    fontWeight: "800",
+    fontSize: 12,
+    fontWeight: "900",
     color: "#fff",
   },
   statusPending: { backgroundColor: "#e67e22" },
   statusReady: { backgroundColor: "#3498db" },
   statusCompleted: { backgroundColor: "#27ae60" },
   statusCancelled: { backgroundColor: "#95a5a6" },
-  recentItems: { fontSize: 13, color: "#666", marginTop: 2 },
+  recentItems: { fontSize: 15, color: "#555", fontWeight: "700", marginTop: 3 },
+  recentPhoneRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 6,
+  },
+  recentPhone: { fontSize: 14, color: "#444", fontWeight: "800" },
+  phoneEditBtn: {
+    backgroundColor: "#eef2f7",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 7,
+  },
+  phoneEditBtnText: { fontSize: 12, color: "#1a1a2e", fontWeight: "900" },
   recentTotal: {
-    fontSize: 14,
-    fontWeight: "600",
+    fontSize: 17,
+    fontWeight: "900",
     color: "#e74c3c",
     marginTop: 2,
   },
@@ -912,7 +1341,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 8,
   },
-  cancelBtnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  cancelBtnText: { color: "#fff", fontWeight: "900", fontSize: 15 },
   // 매출
   salesSection: {
     flex: 1,
@@ -956,6 +1385,11 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 420,
   },
+  modalContentWide: {
+    maxWidth: 620,
+    padding: 26,
+    borderRadius: 18,
+  },
   modalBodyScroll: { flexShrink: 1 },
   modalBodyContent: { paddingBottom: 4 },
   modalTitle: {
@@ -964,6 +1398,7 @@ const styles = StyleSheet.create({
     color: "#1a1a2e",
     marginBottom: 10,
   },
+  modalTitleWide: { fontSize: 30, marginBottom: 16, fontWeight: "900" },
   modalSummary: {
     backgroundColor: "#f8f8f8",
     padding: 10,
@@ -971,6 +1406,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   modalItem: { fontSize: 14, color: "#555", marginBottom: 4 },
+  modalItemWide: { fontSize: 21, fontWeight: "800", marginBottom: 8 },
   modalTotal: {
     fontSize: 16,
     fontWeight: "700",
@@ -980,12 +1416,14 @@ const styles = StyleSheet.create({
     borderTopColor: "#e0e0e0",
     paddingTop: 8,
   },
+  modalTotalWide: { fontSize: 25, fontWeight: "900", marginTop: 12 },
   inputLabel: {
     fontSize: 14,
     fontWeight: "600",
     color: "#333",
     marginBottom: 3,
   },
+  inputLabelWide: { fontSize: 20, fontWeight: "900", marginBottom: 6 },
   input: {
     borderWidth: 1,
     borderColor: "#ddd",
@@ -994,6 +1432,56 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     fontSize: 16,
     marginBottom: 8,
+  },
+  phoneInputRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 8,
+    marginBottom: 8,
+  },
+  phoneInput: { flex: 1, marginBottom: 0 },
+  waitingPhoneBtn: {
+    minWidth: 110,
+    backgroundColor: "#eef2f7",
+    borderWidth: 1,
+    borderColor: "#d8e0eb",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  waitingPhoneBtnWide: {
+    minWidth: 174,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+  },
+  waitingPhoneBtnText: { fontSize: 14, fontWeight: "900", color: "#1a1a2e" },
+  waitingPhoneBtnTextWide: { fontSize: 20 },
+  waitingPhoneSubText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#555",
+    marginTop: 2,
+  },
+  waitingPhoneSubTextWide: { fontSize: 15 },
+  clearPhoneBtn: {
+    minHeight: 44,
+    borderRadius: 10,
+    backgroundColor: "#fff3f3",
+    borderWidth: 1,
+    borderColor: "#ffd3d3",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  clearPhoneBtnWide: { minHeight: 58, borderRadius: 12, marginBottom: 16 },
+  clearPhoneBtnText: { fontSize: 14, fontWeight: "900", color: "#c92a2a" },
+  clearPhoneBtnTextWide: { fontSize: 20 },
+  inputWide: {
+    fontSize: 24,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    marginBottom: 12,
   },
   cashDetailsSlot: { minHeight: 118 },
   cashShortcuts: { flexDirection: "row", gap: 8, marginBottom: 8 },
@@ -1017,6 +1505,8 @@ const styles = StyleSheet.create({
   },
   payTabIcon: { fontSize: 18, marginBottom: 1, color: "#777" },
   payTabText: { fontSize: 17, fontWeight: "800", color: "#555" },
+  payTabIconWide: { fontSize: 28, marginBottom: 4 },
+  payTabTextWide: { fontSize: 25, fontWeight: "900" },
   payTabTextActive: { color: "#1a1a2e" },
   cashBtn: {
     flex: 1,
@@ -1026,12 +1516,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   cashBtnText: { fontSize: 13, fontWeight: "600", color: "#555" },
+  cashBtnTextWide: { fontSize: 19, fontWeight: "900" },
   changeText: {
     fontSize: 16,
     fontWeight: "700",
     color: "#2ecc71",
     marginBottom: 12,
   },
+  changeTextWide: { fontSize: 22, fontWeight: "900" },
   changeTextPlaceholder: {
     fontSize: 16,
     marginBottom: 12,
@@ -1044,6 +1536,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginVertical: 8,
   },
+  nextNumberWide: { fontSize: 34, marginVertical: 14 },
   modalActions: { flexDirection: "row", gap: 10, marginTop: 8 },
   modalCancelBtn: {
     flex: 1,
@@ -1060,5 +1553,21 @@ const styles = StyleSheet.create({
     backgroundColor: "#1a1a2e",
     alignItems: "center",
   },
+  modalCompleteBtn: {
+    flex: 2,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: "#27ae60",
+    alignItems: "center",
+  },
   modalSubmitText: { fontSize: 16, fontWeight: "700", color: "#fff" },
+  modalButtonTextWide: { fontSize: 22, fontWeight: "900" },
+  phoneEditModal: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 18,
+  },
+  phoneEditModalWide: { maxWidth: 620, padding: 26, borderRadius: 18 },
 });

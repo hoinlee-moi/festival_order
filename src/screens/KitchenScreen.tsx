@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   FlatList,
-  useWindowDimensions,
   ActivityIndicator,
   Alert,
 } from "react-native";
@@ -27,9 +26,6 @@ function formatPhone(phone: string): string {
 }
 
 export default function KitchenScreen({ navigation }: Props) {
-  const { width } = useWindowDimensions();
-  const isWide = width >= 768;
-
   const {
     data: orders = [],
     isLoading,
@@ -78,7 +74,7 @@ export default function KitchenScreen({ navigation }: Props) {
   };
 
   const renderOrderCard = ({ item }: { item: Order }) => (
-    <View style={[styles.orderCard, isWide && styles.orderCardWide]}>
+    <View style={styles.orderCard}>
       {/* 대기번호 */}
       <View style={styles.numberBadge}>
         <Text style={styles.numberText}>#{item.order_number}</Text>
@@ -91,7 +87,7 @@ export default function KitchenScreen({ navigation }: Props) {
         {item.items.map((menuItem, idx) => (
           <View key={idx} style={styles.menuRow}>
             <Text style={styles.menuItemName}>{menuItem.menuName}</Text>
-            <Text style={styles.menuItemQty}>×{menuItem.quantity}</Text>
+            <Text style={styles.menuItemQty}>{menuItem.quantity}</Text>
           </View>
         ))}
       </View>
@@ -111,7 +107,11 @@ export default function KitchenScreen({ navigation }: Props) {
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* 헤더 */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.navigate("RoleSelect")}>
+        <TouchableOpacity
+          onPress={() =>
+            navigation.reset({ index: 0, routes: [{ name: "RoleSelect" }] })
+          }
+        >
           <Text style={styles.backBtn}>← 처음으로</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>🍳 주방</Text>
@@ -137,8 +137,6 @@ export default function KitchenScreen({ navigation }: Props) {
         <FlatList
           data={orders}
           keyExtractor={(item) => item.id}
-          numColumns={isWide ? 2 : 1}
-          key={isWide ? "wide" : "narrow"}
           contentContainerStyle={styles.list}
           renderItem={renderOrderCard}
         />
@@ -172,51 +170,62 @@ const styles = StyleSheet.create({
   emptyEmoji: { fontSize: 60, marginBottom: 12 },
   emptyText: { fontSize: 20, color: "#aaa", fontWeight: "600" },
   // 리스트
-  list: { padding: 12, paddingBottom: 40 },
+  list: {
+    width: "100%",
+    maxWidth: 760,
+    alignSelf: "center",
+    padding: 14,
+    paddingBottom: 40,
+  },
   orderCard: {
     backgroundColor: "#fff",
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 12,
+    borderRadius: 14,
+    padding: 18,
+    marginBottom: 14,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.12,
     shadowRadius: 6,
     elevation: 4,
   },
-  orderCardWide: { flex: 1, marginHorizontal: 6 },
   // 대기번호
   numberBadge: {
     backgroundColor: "#1a1a2e",
     alignSelf: "flex-start",
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
     borderRadius: 10,
-    marginBottom: 14,
+    marginBottom: 10,
   },
-  numberText: { fontSize: 28, fontWeight: "900", color: "#ffd460" },
+  numberText: { fontSize: 32, fontWeight: "900", color: "#ffd460" },
   phoneText: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: "700",
     color: "#666",
-    marginBottom: 12,
+    marginBottom: 14,
   },
   // 메뉴 아이템
-  itemsList: { marginBottom: 16 },
+  itemsList: { marginBottom: 18 },
   menuRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: "#f0f0f0",
   },
-  menuItemName: { fontSize: 22, fontWeight: "700", color: "#333" },
-  menuItemQty: { fontSize: 24, fontWeight: "800", color: "#e74c3c" },
+  menuItemName: { flex: 1, fontSize: 30, fontWeight: "900", color: "#222" },
+  menuItemQty: {
+    minWidth: 72,
+    textAlign: "right",
+    fontSize: 34,
+    fontWeight: "900",
+    color: "#e74c3c",
+  },
   // 완료 버튼
   completeBtn: {
     backgroundColor: "#2ecc71",
-    paddingVertical: 16,
+    paddingVertical: 17,
     borderRadius: 12,
     alignItems: "center",
   },
