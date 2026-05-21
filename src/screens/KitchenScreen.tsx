@@ -12,12 +12,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Audio } from "expo-av";
 import { useOrdersByStatus, useUpdateOrderStatus } from "../hooks/useOrders";
 import { useRealtimeOrders } from "../hooks/useRealtimeOrders";
+import { getLocalDateString } from "../lib/date";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { Order, RootStackParamList } from "../types";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Kitchen">;
-
-const getTodayString = () => new Date().toISOString().split("T")[0];
 
 function formatPhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
@@ -30,7 +29,7 @@ export default function KitchenScreen({ navigation }: Props) {
     data: orders = [],
     isLoading,
     isError,
-  } = useOrdersByStatus("PENDING", getTodayString());
+  } = useOrdersByStatus("PENDING", getLocalDateString());
   const updateStatus = useUpdateOrderStatus();
   useRealtimeOrders("PENDING");
 

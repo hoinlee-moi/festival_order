@@ -17,13 +17,16 @@ import {
   useSalesSummary,
 } from "../hooks/useOrders";
 import { useRealtimeOrders } from "../hooks/useRealtimeOrders";
+import {
+  getLocalDateString,
+  parseLocalDateString,
+  shiftLocalDateString,
+} from "../lib/date";
 
 type Props = NativeStackScreenProps<RootStackParamList, "SalesDashboard">;
 
-const getTodayString = () => new Date().toISOString().split("T")[0];
-
 const formatDate = (dateString: string) => {
-  const date = new Date(dateString);
+  const date = parseLocalDateString(dateString);
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
@@ -31,15 +34,9 @@ const formatDate = (dateString: string) => {
   return `${year}.${month}.${day} (${weekday})`;
 };
 
-const shiftDate = (dateString: string, days: number) => {
-  const date = new Date(dateString);
-  date.setDate(date.getDate() + days);
-  return date.toISOString().split("T")[0];
-};
-
 export default function SalesDashboardScreen({ navigation }: Props) {
-  const [selectedDate, setSelectedDate] = useState(getTodayString());
-  const isToday = selectedDate === getTodayString();
+  const [selectedDate, setSelectedDate] = useState(getLocalDateString());
+  const isToday = selectedDate === getLocalDateString();
 
   const {
     data: salesSummary,
@@ -106,14 +103,18 @@ export default function SalesDashboardScreen({ navigation }: Props) {
       <View style={styles.dateBar}>
         <TouchableOpacity
           style={styles.dateNavBtn}
-          onPress={() => setSelectedDate((date) => shiftDate(date, -1))}
+          onPress={() =>
+            setSelectedDate((date) => shiftLocalDateString(date, -1))
+          }
         >
           <Text style={styles.dateNavText}>이전</Text>
         </TouchableOpacity>
         <View style={styles.dateCenter}>
           <Text style={styles.dateText}>{formatDate(selectedDate)}</Text>
           {!isToday && (
-            <TouchableOpacity onPress={() => setSelectedDate(getTodayString())}>
+            <TouchableOpacity
+              onPress={() => setSelectedDate(getLocalDateString())}
+            >
               <Text style={styles.todayBtn}>오늘로</Text>
             </TouchableOpacity>
           )}
@@ -121,7 +122,7 @@ export default function SalesDashboardScreen({ navigation }: Props) {
         <TouchableOpacity
           style={[styles.dateNavBtn, isToday && styles.dateNavBtnDisabled]}
           onPress={() =>
-            !isToday && setSelectedDate((date) => shiftDate(date, 1))
+            !isToday && setSelectedDate((date) => shiftLocalDateString(date, 1))
           }
           disabled={isToday}
         >

@@ -7,6 +7,7 @@ import {
   FlatList,
   Alert,
   ActivityIndicator,
+  TextInput,
   useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -24,6 +25,31 @@ function formatPhone(phone: string): string {
   return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
 }
 
+const TEN_MINUTES_MS = 10 * 60 * 1000;
+
+const normalizeDigits = (value: string) => value.replace(/\D/g, "");
+
+const getSmsAgeMs = (sentAt: string | null, now: number) => {
+  if (!sentAt) return null;
+  const sentTime = new Date(sentAt).getTime();
+  if (Number.isNaN(sentTime)) return null;
+  return Math.max(0, now - sentTime);
+};
+
+const getSmsElapsedText = (sentAt: string | null, now: number) => {
+  const ageMs = getSmsAgeMs(sentAt, now);
+  if (ageMs === null) return "";
+  const minutes = Math.floor(ageMs / 60000);
+  if (minutes < 1) return "방금 전 발송";
+  if (minutes < 60) return `${minutes}분 전 발송`;
+
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return restMinutes > 0
+    ? `${hours}시간 ${restMinutes}분 전 발송`
+    : `${hours}시간 전 발송`;
+};
+
 export default function PickupScreen({ navigation }: Props) {
   const { width } = useWindowDimensions();
   const isTablet = width >= 768;
@@ -34,14 +60,31 @@ export default function PickupScreen({ navigation }: Props) {
   const [smsStates, setSmsStates] = React.useState<Record<string, SmsStatus>>(
     {},
   );
+  const [smsSentAtByOrderId, setSmsSentAtByOrderId] = React.useState<
+    Record<string, string>
+  >({});
+  const [phoneSearch, setPhoneSearch] = React.useState("");
+  const [now, setNow] = React.useState(Date.now());
 
-  const handleSendSms = async (order: Order) => {
+  React.useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const filteredOrders = React.useMemo(() => {
+    const query = normalizeDigits(phoneSearch);
+    if (!query) return orders;
+    return orders.filter((order) =>
+      normalizeDigits(order.phone_number).endsWith(query),
+    );
+  }, [orders, phoneSearch]);
+
+  const getLastSmsAt = (order: Order) =>
+    smsSentAtByOrderId[order.id] ?? order.last_sms_at;
+
+  const handleSendSms = async (order: Order, forceResend = false) => {
     const current = getSmsState(order);
-    if (
-      current === "SENDING" ||
-      current === "SENT" ||
-      current === "SEND_UNKNOWN"
-    ) {
+    if (current === "SENDING") {
       return;
     }
 
@@ -51,7 +94,7 @@ export default function PickupScreen({ navigation }: Props) {
       const { data, error } = await supabase.functions.invoke(
         "send-pickup-sms",
         {
-          body: { orderId: order.id },
+          body: { orderId: order.id, forceResend },
         },
       );
 
@@ -81,10 +124,12 @@ export default function PickupScreen({ navigation }: Props) {
         throw new Error(data?.error ?? "SMS 발송 실패");
       }
 
+      const sentAt = new Date().toISOString();
       setSmsStates((prev) => ({
         ...prev,
         [order.id]: (data?.status as SmsStatus | undefined) ?? "SENT",
       }));
+      setSmsSentAtByOrderId((prev) => ({ ...prev, [order.id]: sentAt }));
     } catch (error) {
       setSmsStates((prev) => ({
         ...prev,
@@ -98,6 +143,26 @@ export default function PickupScreen({ navigation }: Props) {
           : "메시지 요청 결과를 확인하지 못했습니다.",
       );
     }
+  };
+
+  const handleSmsButtonPress = (order: Order) => {
+    const current = getSmsState(order);
+    const shouldConfirmResend =
+      current === "SENT" || current === "SEND_UNKNOWN";
+
+    if (!shouldConfirmResend) {
+      handleSendSms(order, false);
+      return;
+    }
+
+    Alert.alert(
+      "문자 다시 보내기",
+      `대기번호 ${order.order_number}번에게 문자를 다시 보낼까요?`,
+      [
+        { text: "아니요", style: "cancel" },
+        { text: "다시 보내기", onPress: () => handleSendSms(order, true) },
+      ],
+    );
   };
 
   const handleComplete = (order: Order) => {
@@ -147,8 +212,8 @@ export default function PickupScreen({ navigation }: Props) {
   const getSmsButtonText = (order: Order) => {
     const st = getSmsState(order);
     if (st === "SENDING") return "발송 중...";
-    if (st === "SENT") return "발송 완료";
-    if (st === "SEND_UNKNOWN") return "확인 필요";
+    if (st === "SENT") return "다시 발송";
+    if (st === "SEND_UNKNOWN") return "재발송";
     if (st === "FAILED") return "재발송";
     return "📲 SMS 발송";
   };
@@ -156,7 +221,7 @@ export default function PickupScreen({ navigation }: Props) {
   const getSmsStatusText = (order: Order) => {
     const st = getSmsState(order);
     if (st === "SENDING") return "SMS 발송 요청 처리 중";
-    if (st === "SENT") return "SMS 발송 확인됨";
+    if (st === "SENT") return "SMS 발송 확인됨 - 필요 시 다시 발송 가능";
     if (st === "SEND_UNKNOWN") return "요청 결과 불명확 - 중복 발송 방지 중";
     if (st === "FAILED") return "발송 실패 - 재시도 가능";
     return "SMS 미발송";
@@ -164,73 +229,129 @@ export default function PickupScreen({ navigation }: Props) {
 
   const isSmsButtonDisabled = (order: Order) => {
     const st = getSmsState(order);
-    return st === "SENDING" || st === "SENT" || st === "SEND_UNKNOWN";
+    return st === "SENDING";
   };
 
-  const renderOrderCard = ({ item }: { item: Order }) => (
-    <View style={[styles.orderCard, isTablet && styles.orderCardTablet]}>
-      {/* 상단: 대기번호 + 전화번호 */}
-      <View style={[styles.cardHeader, isTablet && styles.cardHeaderTablet]}>
-        <Text
-          style={[styles.orderNumber, isTablet && styles.orderNumberTablet]}
-        >
-          #{item.order_number}
-        </Text>
-        <Text style={[styles.phone, isTablet && styles.phoneTablet]}>
-          {formatPhone(item.phone_number)}
-        </Text>
-      </View>
+  const renderOrderCard = ({ item }: { item: Order }) => {
+    const lastSmsAt = getLastSmsAt(item);
+    const smsAgeMs = getSmsAgeMs(lastSmsAt, now);
+    const needsCall =
+      getSmsState(item) === "SENT" &&
+      smsAgeMs !== null &&
+      smsAgeMs >= TEN_MINUTES_MS;
 
-      {/* 메뉴 목록 */}
-      <View style={styles.itemsList}>
-        {item.items.map((menuItem, idx) => (
-          <Text
-            key={idx}
-            style={[styles.menuItemText, isTablet && styles.menuItemTextTablet]}
-          >
-            {menuItem.menuName} × {menuItem.quantity}
-          </Text>
-        ))}
-      </View>
-
-      <Text
-        style={[styles.smsStatusText, isTablet && styles.smsStatusTextTablet]}
+    return (
+      <View
+        style={[
+          styles.orderCard,
+          isTablet && styles.orderCardTablet,
+          needsCall && styles.orderCardCallNeeded,
+        ]}
       >
-        {getSmsStatusText(item)}
-      </Text>
+        {/* 상단: 대기번호 + 전화번호 */}
+        <View style={[styles.cardHeader, isTablet && styles.cardHeaderTablet]}>
+          <Text
+            style={[styles.orderNumber, isTablet && styles.orderNumberTablet]}
+          >
+            #{item.order_number}
+          </Text>
+          <Text style={[styles.phone, isTablet && styles.phoneTablet]}>
+            {formatPhone(item.phone_number)}
+          </Text>
+        </View>
 
-      {/* 버튼 영역 */}
-      <View style={[styles.cardActions, isTablet && styles.cardActionsTablet]}>
-        <TouchableOpacity
-          style={[
-            styles.smsBtn,
-            isTablet && styles.actionBtnTablet,
-            getSmsButtonStyle(item),
-          ]}
-          activeOpacity={0.7}
-          onPress={() => handleSendSms(item)}
-          disabled={isSmsButtonDisabled(item)}
-        >
+        {/* 메뉴 목록 */}
+        <View style={styles.itemsList}>
+          {item.items.map((menuItem, idx) => (
+            <View key={idx} style={styles.menuItemRow}>
+              <Text
+                style={[
+                  styles.menuItemText,
+                  isTablet && styles.menuItemTextTablet,
+                ]}
+              >
+                {menuItem.menuName} × {menuItem.quantity}
+              </Text>
+              <Text
+                style={[
+                  styles.menuPriceText,
+                  isTablet && styles.menuPriceTextTablet,
+                ]}
+              >
+                {menuItem.price.toLocaleString()}원 /{" "}
+                {(menuItem.price * menuItem.quantity).toLocaleString()}원
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.totalRow}>
           <Text
-            style={[styles.smsBtnText, isTablet && styles.smsBtnTextTablet]}
+            style={[styles.totalLabel, isTablet && styles.totalLabelTablet]}
           >
-            {getSmsButtonText(item)}
+            총 가격
           </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.doneBtn, isTablet && styles.actionBtnTablet]}
-          activeOpacity={0.7}
-          onPress={() => handleComplete(item)}
-        >
           <Text
-            style={[styles.doneBtnText, isTablet && styles.doneBtnTextTablet]}
+            style={[styles.totalPrice, isTablet && styles.totalPriceTablet]}
           >
-            최종 완료
+            {item.total_price.toLocaleString()}원
           </Text>
-        </TouchableOpacity>
+        </View>
+
+        <Text
+          style={[styles.smsStatusText, isTablet && styles.smsStatusTextTablet]}
+        >
+          {getSmsStatusText(item)}
+        </Text>
+        {lastSmsAt ? (
+          <Text
+            style={[
+              styles.smsElapsedText,
+              isTablet && styles.smsElapsedTextTablet,
+              needsCall && styles.smsElapsedWarningText,
+            ]}
+          >
+            {needsCall
+              ? `${getSmsElapsedText(lastSmsAt, now)} - 전화 요망`
+              : getSmsElapsedText(lastSmsAt, now)}
+          </Text>
+        ) : null}
+
+        {/* 버튼 영역 */}
+        <View
+          style={[styles.cardActions, isTablet && styles.cardActionsTablet]}
+        >
+          <TouchableOpacity
+            style={[
+              styles.smsBtn,
+              isTablet && styles.actionBtnTablet,
+              getSmsButtonStyle(item),
+            ]}
+            activeOpacity={0.7}
+            onPress={() => handleSmsButtonPress(item)}
+            disabled={isSmsButtonDisabled(item)}
+          >
+            <Text
+              style={[styles.smsBtnText, isTablet && styles.smsBtnTextTablet]}
+            >
+              {getSmsButtonText(item)}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.doneBtn, isTablet && styles.actionBtnTablet]}
+            activeOpacity={0.7}
+            onPress={() => handleComplete(item)}
+          >
+            <Text
+              style={[styles.doneBtnText, isTablet && styles.doneBtnTextTablet]}
+            >
+              최종 완료
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
@@ -257,6 +378,35 @@ export default function PickupScreen({ navigation }: Props) {
         </View>
       </View>
 
+      <View style={[styles.searchWrap, isTablet && styles.searchWrapTablet]}>
+        <TextInput
+          style={[styles.searchInput, isTablet && styles.searchInputTablet]}
+          placeholder="전화번호 뒷자리 검색"
+          keyboardType="number-pad"
+          value={phoneSearch}
+          onChangeText={setPhoneSearch}
+          maxLength={11}
+        />
+        {phoneSearch.length > 0 ? (
+          <TouchableOpacity
+            style={[
+              styles.searchClearBtn,
+              isTablet && styles.searchClearBtnTablet,
+            ]}
+            onPress={() => setPhoneSearch("")}
+          >
+            <Text
+              style={[
+                styles.searchClearBtnText,
+                isTablet && styles.searchClearBtnTextTablet,
+              ]}
+            >
+              지우기
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
       {isLoading ? (
         <ActivityIndicator size="large" style={{ marginTop: 60 }} />
       ) : isError ? (
@@ -276,9 +426,15 @@ export default function PickupScreen({ navigation }: Props) {
             준비된 주문이 없습니다
           </Text>
         </View>
+      ) : filteredOrders.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Text style={[styles.emptyText, isTablet && styles.emptyTextTablet]}>
+            검색된 전화번호가 없습니다
+          </Text>
+        </View>
       ) : (
         <FlatList
-          data={orders}
+          data={filteredOrders}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[styles.list, isTablet && styles.listTablet]}
           renderItem={renderOrderCard}
@@ -317,6 +473,44 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: "#fff", fontWeight: "900", fontSize: 13 },
   badgeTextTablet: { fontSize: 17 },
+  searchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    backgroundColor: "#f0f4f8",
+  },
+  searchWrapTablet: {
+    width: "100%",
+    maxWidth: 760,
+    alignSelf: "center",
+    paddingHorizontal: 14,
+    paddingTop: 14,
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#d8e0eb",
+    backgroundColor: "#fff",
+    paddingHorizontal: 14,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  searchInputTablet: { minHeight: 58, fontSize: 24, paddingHorizontal: 18 },
+  searchClearBtn: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: "#e8e8e8",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  searchClearBtnTablet: { minHeight: 58, paddingHorizontal: 18 },
+  searchClearBtnText: { fontSize: 14, color: "#444", fontWeight: "900" },
+  searchClearBtnTextTablet: { fontSize: 20 },
   // 빈 상태
   emptyContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   emptyEmoji: { fontSize: 46, marginBottom: 10 },
@@ -343,6 +537,11 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   orderCardTablet: { borderRadius: 14, padding: 20, marginBottom: 14 },
+  orderCardCallNeeded: {
+    backgroundColor: "#fff5f5",
+    borderWidth: 2,
+    borderColor: "#ff6b6b",
+  },
   // 카드 헤더
   cardHeader: {
     flexDirection: "row",
@@ -369,6 +568,23 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   menuItemTextTablet: { fontSize: 36, marginBottom: 8 },
+  menuItemRow: { marginBottom: 8 },
+  menuPriceText: {
+    fontSize: 15,
+    color: "#666",
+    fontWeight: "800",
+  },
+  menuPriceTextTablet: { fontSize: 24 },
+  totalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  totalLabel: { fontSize: 16, color: "#333", fontWeight: "900" },
+  totalLabelTablet: { fontSize: 26 },
+  totalPrice: { fontSize: 20, color: "#e74c3c", fontWeight: "900" },
+  totalPriceTablet: { fontSize: 34 },
   // 버튼 영역
   cardActions: { flexDirection: "row", gap: 8 },
   cardActionsTablet: { gap: 10 },
@@ -393,6 +609,14 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   smsStatusTextTablet: { fontSize: 36, marginBottom: 14 },
+  smsElapsedText: {
+    fontSize: 15,
+    color: "#555",
+    fontWeight: "900",
+    marginBottom: 12,
+  },
+  smsElapsedTextTablet: { fontSize: 26, marginBottom: 14 },
+  smsElapsedWarningText: { color: "#c92a2a" },
   doneBtn: {
     flex: 1,
     paddingVertical: 12,

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { getCachedJson, setCachedJson } from "../lib/storage";
+import { getLocalDateString } from "../lib/date";
 import type {
   Order,
   OrderItem,
@@ -74,7 +75,7 @@ export function useCreateOrder() {
       payment_method: PaymentMethod;
       status?: OrderStatus;
     }): Promise<Order> => {
-      const today = new Date().toISOString().split("T")[0];
+      const today = getLocalDateString();
       const { data: maxData, error: maxError } = await supabase
         .from("orders")
         .select("order_number")
@@ -169,7 +170,7 @@ export function useUpdateSmsStatus() {
 }
 
 export function useSalesSummary(date?: string) {
-  const targetDate = date ?? new Date().toISOString().split("T")[0];
+  const targetDate = date ?? getLocalDateString();
 
   return useQuery({
     queryKey: [...ORDERS_QUERY_KEY, "sales", targetDate],
@@ -177,16 +178,10 @@ export function useSalesSummary(date?: string) {
       const cacheKey = buildCacheKey(["orders", "sales", targetDate]);
 
       try {
-        const start = `${targetDate}T00:00:00.000Z`;
-        const next = new Date(targetDate);
-        next.setDate(next.getDate() + 1);
-        const end = `${next.toISOString().split("T")[0]}T00:00:00.000Z`;
-
         const { data, error } = await supabase
           .from("orders")
           .select("total_price, payment_method")
-          .gte("created_at", start)
-          .lt("created_at", end)
+          .eq("event_date", targetDate)
           .eq("status", "COMPLETED");
 
         if (error) throw error;
@@ -227,7 +222,7 @@ export function useSalesSummary(date?: string) {
 }
 
 export function useCompletedOrdersByDate(date?: string) {
-  const targetDate = date ?? new Date().toISOString().split("T")[0];
+  const targetDate = date ?? getLocalDateString();
 
   return useQuery({
     queryKey: [...ORDERS_QUERY_KEY, "completed-by-date", targetDate],
@@ -239,16 +234,10 @@ export function useCompletedOrdersByDate(date?: string) {
       ]);
 
       try {
-        const start = `${targetDate}T00:00:00.000Z`;
-        const next = new Date(targetDate);
-        next.setDate(next.getDate() + 1);
-        const end = `${next.toISOString().split("T")[0]}T00:00:00.000Z`;
-
         const { data, error } = await supabase
           .from("orders")
           .select("*")
-          .gte("created_at", start)
-          .lt("created_at", end)
+          .eq("event_date", targetDate)
           .eq("status", "COMPLETED")
           .order("created_at", { ascending: false });
 
@@ -269,7 +258,7 @@ export function useCompletedOrdersByDate(date?: string) {
 }
 
 export function useOrdersByDate(date?: string) {
-  const targetDate = date ?? new Date().toISOString().split("T")[0];
+  const targetDate = date ?? getLocalDateString();
 
   return useQuery({
     queryKey: [...ORDERS_QUERY_KEY, "by-date", targetDate],
@@ -305,10 +294,15 @@ export function useCloseSession() {
   return useMutation({
     mutationFn: async () => {
       const closedAt = new Date().toISOString();
+      const closedEventDate = getLocalDateString();
 
       const { error: completeError } = await supabase
         .from("orders")
-        .update({ status: "COMPLETED", closed_at: closedAt })
+        .update({
+          status: "COMPLETED",
+          closed_at: closedAt,
+          event_date: closedEventDate,
+        })
         .is("closed_at", null)
         .in("status", ["PENDING", "READY", "COMPLETED"]);
 
@@ -316,7 +310,7 @@ export function useCloseSession() {
 
       const { error: cancelCloseError } = await supabase
         .from("orders")
-        .update({ closed_at: closedAt })
+        .update({ closed_at: closedAt, event_date: closedEventDate })
         .is("closed_at", null)
         .eq("status", "CANCELLED");
 

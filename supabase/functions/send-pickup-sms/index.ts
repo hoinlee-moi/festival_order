@@ -108,10 +108,15 @@ Deno.serve(async (req) => {
     });
   }
 
-  const { orderId } = await req.json().catch(() => ({ orderId: null }));
+  const { orderId, forceResend } = await req.json().catch(() => ({
+    orderId: null,
+    forceResend: false,
+  }));
   if (!orderId || typeof orderId !== "string") {
     return jsonResponse({ ok: false, error: "orderId가 필요합니다." });
   }
+
+  const shouldForceResend = forceResend === true;
 
   const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -137,7 +142,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  if (order.sms_status === "SENT") {
+  if (order.sms_status === "SENT" && !shouldForceResend) {
     return jsonResponse({
       ok: true,
       status: "SENT",
@@ -157,7 +162,10 @@ Deno.serve(async (req) => {
     );
   }
 
-  if (order.sms_status === "SENDING" || order.sms_status === "SEND_UNKNOWN") {
+  if (
+    (order.sms_status === "SENDING" || order.sms_status === "SEND_UNKNOWN") &&
+    !shouldForceResend
+  ) {
     await updateSmsStatus(supabase, order.id, "SEND_UNKNOWN");
     return jsonResponse(
       {
@@ -182,7 +190,12 @@ Deno.serve(async (req) => {
     .from("orders")
     .update({ sms_status: "SENDING", last_sms_at: new Date().toISOString() })
     .eq("id", order.id)
-    .in("sms_status", ["NOT_SENT", "FAILED"])
+    .in(
+      "sms_status",
+      shouldForceResend
+        ? ["NOT_SENT", "FAILED", "SENT", "SEND_UNKNOWN"]
+        : ["NOT_SENT", "FAILED"],
+    )
     .select("id")
     .maybeSingle();
 

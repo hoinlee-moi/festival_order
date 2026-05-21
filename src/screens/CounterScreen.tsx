@@ -22,6 +22,11 @@ import {
   useUpdateOrderStatus,
 } from "../hooks/useOrders";
 import { useRealtimeOrders } from "../hooks/useRealtimeOrders";
+import {
+  getLocalDateString,
+  parseLocalDateString,
+  shiftLocalDateString,
+} from "../lib/date";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type {
   CartItem,
@@ -36,20 +41,12 @@ type Props = NativeStackScreenProps<RootStackParamList, "Counter">;
 // ===== 탭 종류 =====
 type Tab = "order" | "recent";
 
-const getTodayString = () => new Date().toISOString().split("T")[0];
-
 const formatDate = (dateString: string) => {
-  const date = new Date(dateString);
+  const date = parseLocalDateString(dateString);
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   const weekday = ["일", "월", "화", "수", "목", "금", "토"][date.getDay()];
   return `${month}.${day} (${weekday})`;
-};
-
-const shiftDate = (dateString: string, days: number) => {
-  const date = new Date(dateString);
-  date.setDate(date.getDate() + days);
-  return date.toISOString().split("T")[0];
 };
 
 const WAITING_PHONE = "00000000000";
@@ -74,7 +71,7 @@ export default function CounterScreen({ navigation }: Props) {
   const refreshMenus = useRefreshMenus();
   const { data: sessionOrders = [], isError: sessionOrdersError } =
     useOrdersByStatus(["PENDING", "READY", "COMPLETED", "CANCELLED"]);
-  const [recentDate, setRecentDate] = useState(getTodayString());
+  const [recentDate, setRecentDate] = useState(getLocalDateString());
   const { data: recentOrders = [], isError: recentOrdersError } =
     useOrdersByDate(recentDate);
   const createOrder = useCreateOrder();
@@ -92,6 +89,7 @@ export default function CounterScreen({ navigation }: Props) {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [phoneEditOrder, setPhoneEditOrder] = useState<Order | null>(null);
   const [editingPhone, setEditingPhone] = useState("");
+  const [recentPhoneSearch, setRecentPhoneSearch] = useState("");
 
   // ===== 장바구니 로직 =====
   const totalPrice = useMemo(
@@ -155,6 +153,14 @@ export default function CounterScreen({ navigation }: Props) {
   };
 
   const normalizePhone = (num: string) => num.replace(/\D/g, "");
+
+  const filteredRecentOrders = useMemo(() => {
+    const query = normalizePhone(recentPhoneSearch);
+    if (!query) return recentOrders;
+    return recentOrders.filter((order) =>
+      normalizePhone(order.phone_number).endsWith(query),
+    );
+  }, [recentOrders, recentPhoneSearch]);
 
   const openPhoneEditor = (order: Order) => {
     setPhoneEditOrder(order);
@@ -472,7 +478,7 @@ export default function CounterScreen({ navigation }: Props) {
         <Text style={styles.sectionTitle}>날짜별 주문</Text>
         <TouchableOpacity
           style={styles.todaySmallBtn}
-          onPress={() => setRecentDate(getTodayString())}
+          onPress={() => setRecentDate(getLocalDateString())}
         >
           <Text style={styles.todaySmallBtnText}>오늘</Text>
         </TouchableOpacity>
@@ -480,17 +486,50 @@ export default function CounterScreen({ navigation }: Props) {
       <View style={styles.dateSelectorRow}>
         <TouchableOpacity
           style={styles.dateMoveBtn}
-          onPress={() => setRecentDate((date) => shiftDate(date, -1))}
+          onPress={() =>
+            setRecentDate((date) => shiftLocalDateString(date, -1))
+          }
         >
           <Text style={styles.dateMoveBtnText}>이전</Text>
         </TouchableOpacity>
         <Text style={styles.dateSelectorText}>{formatDate(recentDate)}</Text>
         <TouchableOpacity
           style={styles.dateMoveBtn}
-          onPress={() => setRecentDate((date) => shiftDate(date, 1))}
+          onPress={() => setRecentDate((date) => shiftLocalDateString(date, 1))}
         >
           <Text style={styles.dateMoveBtnText}>다음</Text>
         </TouchableOpacity>
+      </View>
+      <View style={styles.recentSearchRow}>
+        <TextInput
+          style={[
+            styles.recentSearchInput,
+            isWide && styles.recentSearchInputWide,
+          ]}
+          placeholder="전화번호 뒷자리 검색"
+          keyboardType="number-pad"
+          value={recentPhoneSearch}
+          onChangeText={setRecentPhoneSearch}
+          maxLength={11}
+        />
+        {recentPhoneSearch.length > 0 ? (
+          <TouchableOpacity
+            style={[
+              styles.recentSearchClearBtn,
+              isWide && styles.recentSearchClearBtnWide,
+            ]}
+            onPress={() => setRecentPhoneSearch("")}
+          >
+            <Text
+              style={[
+                styles.recentSearchClearText,
+                isWide && styles.recentSearchClearTextWide,
+              ]}
+            >
+              지우기
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
       {recentOrdersError ? (
         <Text style={styles.errorText}>
@@ -498,9 +537,11 @@ export default function CounterScreen({ navigation }: Props) {
         </Text>
       ) : recentOrders.length === 0 ? (
         <Text style={styles.emptyText}>해당 날짜의 주문이 없습니다</Text>
+      ) : filteredRecentOrders.length === 0 ? (
+        <Text style={styles.emptyText}>검색된 전화번호가 없습니다</Text>
       ) : (
         <FlatList
-          data={recentOrders}
+          data={filteredRecentOrders}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.recentList}
           renderItem={({ item }) => (
@@ -900,6 +941,23 @@ export default function CounterScreen({ navigation }: Props) {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
+                  styles.modalCompleteBtn,
+                  createOrder.isPending && styles.btnDisabled,
+                ]}
+                onPress={handleImmediateComplete}
+                disabled={createOrder.isPending}
+              >
+                <Text
+                  style={[
+                    styles.modalSubmitText,
+                    isWide && styles.modalButtonTextWide,
+                  ]}
+                >
+                  {createOrder.isPending ? "처리 중..." : "즉시 완료"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
                   styles.modalSubmitBtn,
                   createOrder.isPending && styles.btnDisabled,
                 ]}
@@ -915,23 +973,6 @@ export default function CounterScreen({ navigation }: Props) {
                   ]}
                 >
                   {createOrder.isPending ? "처리 중..." : "주방 접수"}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.modalCompleteBtn,
-                  createOrder.isPending && styles.btnDisabled,
-                ]}
-                onPress={handleImmediateComplete}
-                disabled={createOrder.isPending}
-              >
-                <Text
-                  style={[
-                    styles.modalSubmitText,
-                    isWide && styles.modalButtonTextWide,
-                  ]}
-                >
-                  {createOrder.isPending ? "처리 중..." : "즉시 완료"}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1279,6 +1320,35 @@ const styles = StyleSheet.create({
   },
   dateMoveBtnText: { fontSize: 15, color: "#444", fontWeight: "900" },
   dateSelectorText: { fontSize: 18, color: "#1a1a2e", fontWeight: "900" },
+  recentSearchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+  },
+  recentSearchInput: {
+    flex: 1,
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    paddingHorizontal: 14,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  recentSearchInputWide: { minHeight: 58, fontSize: 24, paddingHorizontal: 18 },
+  recentSearchClearBtn: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: "#e8e8e8",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  recentSearchClearBtnWide: { minHeight: 58, paddingHorizontal: 18 },
+  recentSearchClearText: { fontSize: 14, color: "#444", fontWeight: "900" },
+  recentSearchClearTextWide: { fontSize: 20 },
   recentList: { paddingBottom: 40 },
   recentCard: {
     flexDirection: "row",
